@@ -1160,7 +1160,8 @@ class PlaylistWidget(QtWidgets.QWidget):
 
     def add_tracks(self, tracks: List[Track]):
         for t in tracks:
-            it = QtWidgets.QListWidgetItem(t.title)
+            item_text = f"{t.title} — {format_time(t.duration_sec)}"
+            it = QtWidgets.QListWidgetItem(item_text)
             it.setData(QtCore.Qt.ItemDataRole.UserRole, t)
             self.list.addItem(it)
 
