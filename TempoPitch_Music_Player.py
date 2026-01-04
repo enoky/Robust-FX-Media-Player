@@ -192,7 +192,7 @@ class SoundTouchUnavailable(RuntimeError):
 
 def _try_load_soundtouch() -> ctypes.CDLL:
     # 1) explicit env var
-    explicit = os.environ.get("SOUNDTOUCH_DLL", "C:/soundtouch_dll-2.3.3/SoundTouchDLL_x64.dll").strip()
+    explicit = os.environ.get("SOUNDTOUCH_DLL", "./SoundTouchDLL/SoundTouchDLL_x64.dll").strip()
     candidates: List[str] = []
     if explicit:
         candidates.append(explicit)
