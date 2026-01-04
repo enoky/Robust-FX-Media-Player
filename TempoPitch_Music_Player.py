@@ -1656,11 +1656,11 @@ class MainWindow(QtWidgets.QMainWindow):
         left = QtWidgets.QVBoxLayout()
         left.setContentsMargins(16, 16, 16, 16)
         left.setSpacing(12)
-        left.addWidget(self.header_frame)
         left.addWidget(self.transport)
         left.addWidget(self.visualizer)
         left.addWidget(self.dsp_widget)
         left.addWidget(self.appearance_group)
+        left.addWidget(self.header_frame)
         left.addStretch(1)
 
         leftw = QtWidgets.QWidget()
