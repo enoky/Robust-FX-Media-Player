@@ -1223,6 +1223,88 @@ class PlayerEngine(QtCore.QObject):
 # UI Widgets
 # -----------------------------
 
+class VisualizerWidget(QtWidgets.QWidget):
+    def __init__(self, engine: PlayerEngine, parent=None):
+        super().__init__(parent)
+        self.engine = engine
+        self._fft_size = 2048
+        self._bar_count = 48
+        self._bar_levels = np.zeros(self._bar_count, dtype=np.float32)
+        self._timer = QtCore.QTimer(self)
+        self._timer.setInterval(33)
+        self._timer.timeout.connect(self._pull_frames)
+        self._timer.start()
+        self.setMinimumHeight(140)
+        self.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Fixed)
+
+    def _pull_frames(self) -> None:
+        if not self.engine:
+            return
+        frames = self.engine.get_visualizer_frames(frames=self._fft_size, mono=True)
+        if frames.size == 0:
+            self._bar_levels *= 0.9
+            self.update()
+            return
+        mono = frames.reshape(-1)
+        if mono.size < self._fft_size:
+            padded = np.zeros(self._fft_size, dtype=np.float32)
+            padded[-mono.size:] = mono
+            mono = padded
+        else:
+            mono = mono[-self._fft_size:]
+        window = np.hanning(self._fft_size).astype(np.float32)
+        spectrum = np.fft.rfft(mono * window)
+        magnitudes = np.abs(spectrum)[1:]
+        magnitudes = np.log1p(magnitudes)
+        if magnitudes.size == 0:
+            return
+        peak = np.max(magnitudes)
+        if peak > 0:
+            magnitudes /= peak
+        bin_edges = np.linspace(0, magnitudes.size, self._bar_count + 1, dtype=int)
+        levels = np.zeros(self._bar_count, dtype=np.float32)
+        for i in range(self._bar_count):
+            start = bin_edges[i]
+            end = bin_edges[i + 1]
+            if end > start:
+                levels[i] = float(np.mean(magnitudes[start:end]))
+        self._bar_levels = np.maximum(levels, self._bar_levels * 0.92)
+        self.update()
+
+    def paintEvent(self, event: QtGui.QPaintEvent) -> None:
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, False)
+        palette = self.palette()
+        background = palette.color(QtGui.QPalette.ColorRole.Base)
+        text_color = palette.color(QtGui.QPalette.ColorRole.Text)
+        highlight = palette.color(QtGui.QPalette.ColorRole.Highlight)
+        painter.fillRect(self.rect(), background)
+
+        rect = self.rect().adjusted(12, 12, -12, -12)
+        if rect.width() <= 0 or rect.height() <= 0:
+            return
+
+        baseline_y = rect.bottom()
+        painter.setPen(QtGui.QPen(text_color, 1))
+        painter.drawLine(rect.left(), baseline_y, rect.right(), baseline_y)
+
+        bar_count = len(self._bar_levels)
+        if bar_count == 0:
+            return
+        bar_width = rect.width() / bar_count
+        for i, level in enumerate(self._bar_levels):
+            bar_height = rect.height() * float(level)
+            if bar_height <= 1:
+                continue
+            x = rect.left() + i * bar_width
+            y = rect.bottom() - bar_height
+            color = QtGui.QColor(highlight)
+            color = color.lighter(110 + int(60 * (i / max(1, bar_count - 1))))
+            painter.setBrush(QtGui.QBrush(color))
+            painter.setPen(QtCore.Qt.PenStyle.NoPen)
+            painter.drawRoundedRect(QtCore.QRectF(x + 1, y, bar_width - 2, bar_height), 2.0, 2.0)
+
+
 class TempoPitchWidget(QtWidgets.QGroupBox):
     controlsChanged = QtCore.Signal(float, float, bool, bool)  # tempo, pitch_st, key_lock, tape_mode
 
@@ -1529,6 +1611,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.engine = PlayerEngine(sample_rate=44100, channels=2, parent=self)
 
         self.transport = TransportWidget()
+        self.visualizer = VisualizerWidget(self.engine)
         self.dsp_widget = TempoPitchWidget()
         self.playlist = PlaylistWidget()
 
@@ -1575,6 +1658,7 @@ class MainWindow(QtWidgets.QMainWindow):
         left.setSpacing(12)
         left.addWidget(self.header_frame)
         left.addWidget(self.transport)
+        left.addWidget(self.visualizer)
         left.addWidget(self.dsp_widget)
         left.addWidget(self.appearance_group)
         left.addStretch(1)
