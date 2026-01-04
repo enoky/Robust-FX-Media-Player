@@ -357,6 +357,78 @@ class AudioRingBuffer:
 
 
 # -----------------------------
+# Thread-safe visualizer buffer
+# -----------------------------
+
+class VisualizerBuffer:
+    """
+    Thread-safe ring buffer for recent audio snapshots.
+
+    push(frames): frames (n, ch) float32
+    get_recent(n, mono): returns most recent frames, optional mono downmix
+    """
+    def __init__(self, channels: int, max_seconds: float, sample_rate: int):
+        self.channels = channels
+        self.sample_rate = sample_rate
+        self.max_frames = max(1, int(max_seconds * sample_rate))
+        self._buffer = np.zeros((self.max_frames, channels), dtype=np.float32)
+        self._write_index = 0
+        self._filled = 0
+        self._lock = threading.Lock()
+
+    def clear(self) -> None:
+        with self._lock:
+            self._write_index = 0
+            self._filled = 0
+
+    def push(self, frames: np.ndarray) -> None:
+        if frames.size == 0:
+            return
+        if frames.dtype != np.float32:
+            frames = frames.astype(np.float32, copy=False)
+        if frames.ndim != 2 or frames.shape[1] != self.channels:
+            raise ValueError(f"frames must be (n,{self.channels}) float32, got {frames.shape} {frames.dtype}")
+
+        if frames.shape[0] > self.max_frames:
+            frames = frames[-self.max_frames:, :]
+
+        n = frames.shape[0]
+        with self._lock:
+            end = self._write_index + n
+            if end <= self.max_frames:
+                self._buffer[self._write_index:end, :] = frames
+            else:
+                first = self.max_frames - self._write_index
+                self._buffer[self._write_index:, :] = frames[:first, :]
+                remaining = end - self.max_frames
+                self._buffer[:remaining, :] = frames[first:, :]
+            self._write_index = end % self.max_frames
+            self._filled = min(self.max_frames, self._filled + n)
+
+    def get_recent(self, frames: Optional[int] = None, mono: bool = False) -> np.ndarray:
+        with self._lock:
+            if self._filled == 0:
+                data = np.zeros((0, self.channels), dtype=np.float32)
+            elif self._filled < self.max_frames:
+                data = self._buffer[:self._filled, :]
+            else:
+                if self._write_index == 0:
+                    data = self._buffer
+                else:
+                    data = np.vstack((self._buffer[self._write_index:, :], self._buffer[:self._write_index, :]))
+
+            if frames is not None and frames > 0:
+                data = data[-frames:, :]
+
+            data = np.array(data, copy=True)
+
+        if mono and data.size:
+            mono_data = data.mean(axis=1, dtype=np.float32)
+            return mono_data.reshape(-1, 1)
+        return data
+
+
+# -----------------------------
 # DSP Interfaces
 # -----------------------------
 
@@ -940,6 +1012,7 @@ class PlayerEngine(QtCore.QObject):
         self.track: Optional[Track] = None
 
         self._ring = AudioRingBuffer(channels, max_seconds=4.0, sample_rate=sample_rate)
+        self._viz_buffer = VisualizerBuffer(channels, max_seconds=0.75, sample_rate=sample_rate)
         self._dsp, self._dsp_name = make_dsp(sample_rate, channels)
         self._decoder: Optional[DecoderThread] = None
 
@@ -1010,6 +1083,7 @@ class PlayerEngine(QtCore.QObject):
         self.stop()  # ensure clean slate
 
         self._ring.clear()
+        self._viz_buffer.clear()
         self._dsp.reset()
         self._dsp.set_controls(self._tempo, self._pitch_st, self._key_lock, self._tape_mode)
 
@@ -1061,6 +1135,7 @@ class PlayerEngine(QtCore.QObject):
             self._stream = None
 
         self._ring.clear()
+        self._viz_buffer.clear()
         self._set_state(PlayerState.STOPPED)
 
     def seek(self, target_sec: float):
@@ -1101,6 +1176,8 @@ class PlayerEngine(QtCore.QObject):
                 return
 
             chunk = self._ring.pop(frames)
+            if chunk.size:
+                self._viz_buffer.push(chunk)
             vol = 0.0 if self._muted else self._volume
             outdata[:] = chunk * vol
 
@@ -1128,6 +1205,9 @@ class PlayerEngine(QtCore.QObject):
 
     def get_buffer_seconds(self) -> float:
         return self._ring.frames_available() / self.sample_rate
+
+    def get_visualizer_frames(self, frames: Optional[int] = None, mono: bool = False) -> np.ndarray:
+        return self._viz_buffer.get_recent(frames=frames, mono=mono)
 
     def _set_state(self, st: PlayerState):
         if self.state != st:
