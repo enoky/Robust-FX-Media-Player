@@ -1174,6 +1174,17 @@ class PlaylistWidget(QtWidgets.QWidget):
         it = self.list.item(idx)
         return it.data(QtCore.Qt.ItemDataRole.UserRole) if it else None
 
+    def track_paths(self) -> List[str]:
+        paths: List[str] = []
+        for i in range(self.list.count()):
+            it = self.list.item(i)
+            if not it:
+                continue
+            track = it.data(QtCore.Qt.ItemDataRole.UserRole)
+            if isinstance(track, Track):
+                paths.append(track.path)
+        return paths
+
     def current_index(self) -> int:
         return self.list.currentRow()
 
@@ -1338,6 +1349,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self._reset_shuffle_bag()
 
         self._initial_warnings()
+        self._restore_playlist_session()
 
     def _initial_warnings(self):
         warnings = []
@@ -1587,8 +1599,35 @@ class MainWindow(QtWidgets.QMainWindow):
             self._advance_track(direction=1, auto=True)
 
     def closeEvent(self, e: QtGui.QCloseEvent):
+        self.settings.setValue("playlist/paths", self.playlist.track_paths())
+        current_index = self.playlist.current_index()
+        if current_index < 0:
+            current_index = self._current_index
+        self.settings.setValue("playlist/current_index", current_index)
+        self.settings.setValue("playlist/position_sec", self.engine.get_position())
         self.engine.stop()
         super().closeEvent(e)
+
+    def _restore_playlist_session(self):
+        saved_paths = self.settings.value("playlist/paths", [], type=list)
+        if saved_paths:
+            self._add_paths(saved_paths)
+
+        saved_index = self.settings.value("playlist/current_index", -1, type=int)
+        saved_pos = self.settings.value("playlist/position_sec", 0.0, type=float)
+
+        if saved_index is None:
+            return
+
+        idx = int(saved_index)
+        if 0 <= idx < self.playlist.count():
+            self._current_index = idx
+            self.playlist.select_index(idx)
+            track = self.playlist.get_track(idx)
+            if track:
+                self.engine.load_track(track.path)
+                if saved_pos and saved_pos > 0:
+                    self.engine.seek(float(saved_pos))
 
 
 def main():
