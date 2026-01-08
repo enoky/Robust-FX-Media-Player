@@ -1406,7 +1406,7 @@ class VisualizerWidget(QtWidgets.QWidget):
 
 
 class TempoPitchWidget(QtWidgets.QGroupBox):
-    controlsChanged = QtCore.Signal(float, float, bool, bool)  # tempo, pitch_st, key_lock, tape_mode
+    controlsChanged = QtCore.Signal(float, float, bool, bool, bool)  # tempo, pitch_st, key_lock, tape_mode, lock_432
 
     def __init__(self, parent=None):
         super().__init__("Tempo & Pitch", parent)
@@ -1436,6 +1436,11 @@ class TempoPitchWidget(QtWidgets.QGroupBox):
         self.tape_mode.setToolTip("Link pitch to tempo changes.")
         self.tape_mode.setAccessibleName("Tape mode")
 
+        self.lock_432 = QtWidgets.QCheckBox("Lock pitch to A4=432 Hz")
+        self.lock_432.setChecked(False)
+        self.lock_432.setToolTip("Lock pitch to A4=432 Hz and disable manual pitch edits.")
+        self.lock_432.setAccessibleName("Lock pitch to A4 432")
+
         self.reset_btn = QtWidgets.QPushButton("Reset")
         self.reset_btn.setToolTip("Reset tempo and pitch to defaults.")
         self.reset_btn.setAccessibleName("Reset tempo and pitch")
@@ -1447,6 +1452,7 @@ class TempoPitchWidget(QtWidgets.QGroupBox):
         row = QtWidgets.QHBoxLayout()
         row.addWidget(self.key_lock)
         row.addWidget(self.tape_mode)
+        row.addWidget(self.lock_432)
         row.addStretch(1)
         row.addWidget(self.reset_btn)
 
@@ -1458,24 +1464,46 @@ class TempoPitchWidget(QtWidgets.QGroupBox):
         self.pitch_slider.valueChanged.connect(self._emit)
         self.key_lock.toggled.connect(self._emit)
         self.tape_mode.toggled.connect(self._on_tape)
+        self.lock_432.toggled.connect(self._on_lock_432)
         self.reset_btn.clicked.connect(self._on_reset)
 
+        self._update_pitch_controls_enabled()
         self._emit()
 
+    @property
+    def _lock_432_semitones(self) -> float:
+        return 12.0 * math.log2(432.0 / 440.0)
+
     def _on_tape(self, on: bool):
-        self.pitch_slider.setEnabled(not on)
+        if on:
+            self.lock_432.setChecked(False)
+        self._update_pitch_controls_enabled()
         self.key_lock.setEnabled(not on)
         self._emit()
+
+    def _on_lock_432(self, on: bool):
+        if on:
+            self.pitch_slider.setValue(int(round(self._lock_432_semitones * 10)))
+        self._update_pitch_controls_enabled()
+        self._emit()
+
+    def _update_pitch_controls_enabled(self):
+        tape_on = self.tape_mode.isChecked()
+        lock_on = self.lock_432.isChecked()
+        self.pitch_slider.setEnabled(not tape_on and not lock_on)
+        self.lock_432.setEnabled(not tape_on)
 
     def _on_reset(self):
         self.tempo_slider.setValue(100)
         self.pitch_slider.setValue(0)
         self.key_lock.setChecked(True)
         self.tape_mode.setChecked(False)
+        self.lock_432.setChecked(False)
 
     def _emit(self):
         tempo = self.tempo_slider.value() / 100.0
-        pitch = self.pitch_slider.value() / 10.0
+        lock_432 = self.lock_432.isChecked()
+        pitch = self._lock_432_semitones if lock_432 else self.pitch_slider.value() / 10.0
         key_lock = self.key_lock.isChecked()
         tape = self.tape_mode.isChecked()
 
@@ -1483,10 +1511,12 @@ class TempoPitchWidget(QtWidgets.QGroupBox):
         if tape:
             st = 12.0 * math.log2(max(1e-6, tempo))
             self.pitch_label.setText(f"Pitch: {st:+.2f} st (linked)")
+        elif lock_432:
+            self.pitch_label.setText(f"Pitch: {pitch:+.2f} st (A4=432 Hz)")
         else:
             self.pitch_label.setText(f"Pitch: {pitch:+.1f} st")
 
-        self.controlsChanged.emit(tempo, pitch, key_lock, tape)
+        self.controlsChanged.emit(tempo, pitch, key_lock, tape, lock_432)
 
 
 class TransportWidget(QtWidgets.QWidget):
@@ -1856,7 +1886,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self.transport.muteToggled.connect(self._on_mute_toggled)
         self.transport.seekRequested.connect(self._on_seek_fraction)
 
-        self.dsp_widget.controlsChanged.connect(self.engine.set_dsp_controls)
+        self.dsp_widget.controlsChanged.connect(
+            lambda tempo, pitch, key_lock, tape_mode, _lock_432: self.engine.set_dsp_controls(
+                tempo,
+                pitch,
+                key_lock,
+                tape_mode,
+            )
+        )
         self.dsp_widget.controlsChanged.connect(self._on_dsp_controls_changed)
 
         self.playlist.addFilesRequested.connect(self._on_add_files_requested)
@@ -2029,11 +2066,12 @@ class MainWindow(QtWidgets.QMainWindow):
     def _on_mute_toggled(self, muted: bool):
         self.settings.setValue("audio/muted", bool(muted))
 
-    def _on_dsp_controls_changed(self, tempo: float, pitch: float, key_lock: bool, tape_mode: bool):
+    def _on_dsp_controls_changed(self, tempo: float, pitch: float, key_lock: bool, tape_mode: bool, lock_432: bool):
         self.settings.setValue("dsp/tempo", float(tempo))
         self.settings.setValue("dsp/pitch", float(pitch))
         self.settings.setValue("dsp/key_lock", bool(key_lock))
         self.settings.setValue("dsp/tape_mode", bool(tape_mode))
+        self.settings.setValue("dsp/lock_432", bool(lock_432))
 
     def _set_shuffle(self, on: bool):
         self._shuffle = bool(on)
@@ -2225,6 +2263,7 @@ class MainWindow(QtWidgets.QMainWindow):
         pitch = self.settings.value("dsp/pitch", 0.0, type=float)
         key_lock = self.settings.value("dsp/key_lock", True, type=bool)
         tape_mode = self.settings.value("dsp/tape_mode", False, type=bool)
+        lock_432 = self.settings.value("dsp/lock_432", False, type=bool)
 
         tempo_value = int(round(clamp(float(tempo), 0.5, 2.0) * 100))
         pitch_value = int(round(clamp(float(pitch), -12.0, 12.0) * 10))
@@ -2232,6 +2271,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.dsp_widget.tempo_slider.setValue(tempo_value)
         self.dsp_widget.pitch_slider.setValue(pitch_value)
         self.dsp_widget.key_lock.setChecked(bool(key_lock))
+        self.dsp_widget.lock_432.setChecked(bool(lock_432))
         self.dsp_widget.tape_mode.setChecked(bool(tape_mode))
 
     def _apply_ui_settings(self):
@@ -2253,6 +2293,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.settings.setValue("dsp/pitch", self.dsp_widget.pitch_slider.value() / 10.0)
         self.settings.setValue("dsp/key_lock", self.dsp_widget.key_lock.isChecked())
         self.settings.setValue("dsp/tape_mode", self.dsp_widget.tape_mode.isChecked())
+        self.settings.setValue("dsp/lock_432", self.dsp_widget.lock_432.isChecked())
 
     def _restore_playlist_session(self):
         saved_paths = self.settings.value("playlist/paths", [], type=list)
