@@ -894,7 +894,7 @@ def probe_metadata(path: str) -> TrackMetadata:
                 "-print_format",
                 "json",
                 "-show_entries",
-                "format=duration:format_tags=artist,album,album_artist,title:stream=codec_type,disposition,tags",
+                "format=duration:format_tags=artist,album,album_artist,title:stream=index,codec_type:stream_disposition=attached_pic:stream_tags=comment,title,mimetype",
                 path,
             ],
             capture_output=True,
@@ -914,30 +914,22 @@ def probe_metadata(path: str) -> TrackMetadata:
 
         cover_art = None
         streams = data.get("streams", []) or []
-        attached_stream_index = None
-        attached_video_index = None
-        video_index = 0
-        for idx, stream in enumerate(streams):
-            if stream.get("codec_type") == "video":
-                if (
-                    attached_stream_index is None
-                    and stream.get("disposition", {}).get("attached_pic") == 1
-                ):
-                    attached_stream_index = idx
-                    attached_video_index = video_index
-                video_index += 1
-            elif (
-                attached_stream_index is None
-                and stream.get("disposition", {}).get("attached_pic") == 1
-            ):
-                attached_stream_index = idx
+        attached_stream_index: Optional[int] = None
+
+        # NOTE: ffprobe only returns stream disposition/tags if requested as
+        # stream_disposition / stream_tags (see -show_entries above).
+        for fallback_idx, stream in enumerate(streams):
+            disp = stream.get("disposition", {}) or {}
+            attached = disp.get("attached_pic")
+            if attached in (1, "1", True):
+                # Prefer the real ffmpeg stream index; fall back to list position.
+                idx_val = stream.get("index")
+                attached_stream_index = idx_val if isinstance(idx_val, int) else fallback_idx
+                break
 
         if attached_stream_index is not None and have_exe("ffmpeg"):
-            map_arg = (
-                f"0:v:{attached_video_index}"
-                if attached_video_index is not None
-                else f"0:{attached_stream_index}"
-            )
+            # Use the absolute stream index (0:<index>) to avoid 'video index' pitfalls.
+            map_arg = f"0:{attached_stream_index}"
             art = subprocess.run(
                 [
                     "ffmpeg",
@@ -951,7 +943,7 @@ def probe_metadata(path: str) -> TrackMetadata:
                     "-an",
                     "-frames:v",
                     "1",
-                    "-vcodec",
+                    "-c:v",
                     "png",
                     "-f",
                     "image2pipe",
@@ -1620,6 +1612,8 @@ class PlaylistWidget(QtWidgets.QWidget):
         self.list = QtWidgets.QListWidget()
         self.list.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.SingleSelection)
         self.list.setDragDropMode(QtWidgets.QAbstractItemView.DragDropMode.InternalMove)
+        self.list.setIconSize(QtCore.QSize(42, 42))
+        self.list.setUniformItemSizes(True)
 
         add_files = QtWidgets.QPushButton("Add Files…")
         add_folder = QtWidgets.QPushButton("Add Folder…")
@@ -1649,10 +1643,23 @@ class PlaylistWidget(QtWidgets.QWidget):
         self.trackActivated.emit(self.list.row(item))
 
     def add_tracks(self, tracks: List[Track]):
+        icon_size = self.list.iconSize()
         for t in tracks:
             item_text = f"{format_track_title(t)} — {format_time(t.duration_sec)}"
             it = QtWidgets.QListWidgetItem(item_text)
             it.setData(QtCore.Qt.ItemDataRole.UserRole, t)
+
+            # Small album-art thumbnail in the playlist (if embedded artwork exists)
+            if t.cover_art:
+                pm = QtGui.QPixmap()
+                if pm.loadFromData(t.cover_art):
+                    pm = pm.scaled(
+                        icon_size,
+                        QtCore.Qt.AspectRatioMode.KeepAspectRatio,
+                        QtCore.Qt.TransformationMode.SmoothTransformation,
+                    )
+                    it.setIcon(QtGui.QIcon(pm))
+
             self.list.addItem(it)
 
     def clear(self):
