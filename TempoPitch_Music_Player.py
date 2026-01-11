@@ -2562,7 +2562,13 @@ class PlayerEngine(QtCore.QObject):
     trackChanged = QtCore.Signal(object)    # Track
     dspChanged = QtCore.Signal(str)         # name
 
-    def __init__(self, sample_rate: int = 44100, channels: int = 2, parent=None):
+    def __init__(
+        self,
+        sample_rate: int = 44100,
+        channels: int = 2,
+        metrics_enabled: bool = True,
+        parent=None,
+    ):
         super().__init__(parent)
         self.sample_rate = sample_rate
         self.channels = channels
@@ -2663,7 +2669,10 @@ class PlayerEngine(QtCore.QObject):
         self._callback_overflows = 0
         self._callback_time_total = 0.0
         self._callback_time_max = 0.0
-        self._metrics_enabled = env_flag("TEMPOPITCH_DEBUG_METRICS") or env_flag("TEMPOPITCH_DEBUG_AUTOPLAY")
+        self._metrics_force_enabled = env_flag("TEMPOPITCH_DEBUG_METRICS") or env_flag(
+            "TEMPOPITCH_DEBUG_AUTOPLAY"
+        )
+        self._metrics_enabled = bool(metrics_enabled) or self._metrics_force_enabled
         self._metrics_last_log = time.monotonic()
         self._viz_callback_stride = 3
         self._viz_downsample = 2
@@ -2679,6 +2688,9 @@ class PlayerEngine(QtCore.QObject):
 
     def set_muted(self, muted: bool):
         self._muted = bool(muted)
+
+    def set_metrics_enabled(self, enabled: bool):
+        self._metrics_enabled = bool(enabled) or self._metrics_force_enabled
 
     def set_buffer_preset(self, preset_name: str) -> None:
         if preset_name not in BUFFER_PRESETS:
@@ -4192,8 +4204,14 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.settings = QtCore.QSettings("ChatGPT", "TempoPitchPlayer")
         self._theme_name = str(self.settings.value("ui/theme", "Ocean"))
+        metrics_enabled = self.settings.value("audio/metrics_enabled", True, type=bool)
 
-        self.engine = PlayerEngine(sample_rate=44100, channels=2, parent=self)
+        self.engine = PlayerEngine(
+            sample_rate=44100,
+            channels=2,
+            metrics_enabled=metrics_enabled,
+            parent=self,
+        )
 
         self.transport = TransportWidget()
         self.visualizer = VisualizerWidget(self.engine)
@@ -4252,8 +4270,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.buffer_preset_combo = QtWidgets.QComboBox()
         self.buffer_preset_combo.addItems(list(BUFFER_PRESETS.keys()))
         self.buffer_preset_combo.setToolTip("Balance output latency vs stability.")
+        self.metrics_checkbox = QtWidgets.QCheckBox("Enable metrics logging")
+        self.metrics_checkbox.setToolTip("Log audio engine metrics periodically.")
+        self.metrics_checkbox.setChecked(bool(metrics_enabled))
         audio_layout = QtWidgets.QFormLayout(self.audio_group)
         audio_layout.addRow("Buffer preset", self.buffer_preset_combo)
+        audio_layout.addRow(self.metrics_checkbox)
 
         self._shuffle = bool(self.settings.value("playback/shuffle", False, type=bool))
         repeat_setting = self.settings.value("playback/repeat", RepeatMode.OFF.value)
@@ -4429,6 +4451,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.playlist.trackActivated.connect(self._on_track_activated)
         self.theme_combo.currentTextChanged.connect(self._on_theme_changed)
         self.buffer_preset_combo.currentTextChanged.connect(self._on_buffer_preset_changed)
+        self.metrics_checkbox.toggled.connect(self._on_metrics_toggled)
 
         self.engine.trackChanged.connect(self._on_track_changed)
         self.engine.stateChanged.connect(self._on_state_changed)
@@ -4440,6 +4463,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self._timer.setInterval(120)
         self._timer.timeout.connect(self._tick)
         self._timer.start()
+        self._metrics_timer = QtCore.QTimer(self)
+        self._metrics_timer.setInterval(300)
+        self._metrics_timer.timeout.connect(self.engine.log_metrics_if_needed)
 
         # Shortcuts
         QtGui.QShortcut(QtGui.QKeySequence("Space"), self, activated=self._toggle_play_pause)
@@ -4625,6 +4651,10 @@ class MainWindow(QtWidgets.QMainWindow):
             self.buffer_preset_combo.blockSignals(False)
         self.settings.setValue("audio/buffer_preset", preset)
         self.engine.set_buffer_preset(preset)
+
+    def _on_metrics_toggled(self, enabled: bool):
+        self.settings.setValue("audio/metrics_enabled", bool(enabled))
+        self.engine.set_metrics_enabled(bool(enabled))
 
     def _on_dsp_controls_changed(self, tempo: float, pitch: float, key_lock: bool, tape_mode: bool, lock_432: bool):
         self.settings.setValue("dsp/tempo", float(tempo))
@@ -4857,6 +4887,11 @@ class MainWindow(QtWidgets.QMainWindow):
 
         is_playing = has_track and st in (PlayerState.PLAYING, PlayerState.LOADING)
         self.transport.set_play_pause_state(is_playing)
+        if is_playing:
+            if not self._metrics_timer.isActive():
+                self._metrics_timer.start()
+        elif self._metrics_timer.isActive():
+            self._metrics_timer.stop()
 
     def _on_error(self, msg: str):
         self.status.setText(f"❌ {msg}")
@@ -4864,7 +4899,6 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _tick(self):
         self.engine.update_position_from_clock()
-        self.engine.log_metrics_if_needed()
         pos = self.engine.get_position()
         self.transport.set_time(pos, self._dur)
 
@@ -4903,6 +4937,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.buffer_preset_combo.setCurrentText(buffer_preset)
         self.buffer_preset_combo.blockSignals(False)
         self.engine.set_buffer_preset(buffer_preset)
+        metrics_enabled = self.settings.value("audio/metrics_enabled", True, type=bool)
+        self.metrics_checkbox.blockSignals(True)
+        self.metrics_checkbox.setChecked(bool(metrics_enabled))
+        self.metrics_checkbox.blockSignals(False)
+        self.engine.set_metrics_enabled(bool(metrics_enabled))
 
         tempo = self.settings.value("dsp/tempo", 1.0, type=float)
         pitch = self.settings.value("dsp/pitch", 0.0, type=float)
@@ -5109,6 +5148,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def _save_ui_settings(self):
         self.settings.setValue("audio/volume_slider", self.transport.volume_slider.value())
         self.settings.setValue("audio/muted", self.transport.mute_btn.isChecked())
+        self.settings.setValue("audio/metrics_enabled", self.metrics_checkbox.isChecked())
         self.settings.setValue("dsp/tempo", self.dsp_widget.tempo_slider.value() / 100.0)
         self.settings.setValue("dsp/pitch", self.dsp_widget.pitch_slider.value() / 10.0)
         self.settings.setValue("dsp/key_lock", self.dsp_widget.key_lock.isChecked())
