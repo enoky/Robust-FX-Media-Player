@@ -824,6 +824,36 @@ class ReverbEffect(EffectProcessor):
         return out
 
 
+class StereoWidenerEffect(EffectProcessor):
+    name = "Stereo Width"
+
+    def __init__(self, width: float = 1.0, enabled: bool = True):
+        super().__init__(enabled=enabled)
+        self._width = clamp(float(width), 0.0, 2.0)
+
+    def set_width(self, width: float) -> None:
+        self._width = clamp(float(width), 0.0, 2.0)
+
+    def process(self, x: np.ndarray) -> np.ndarray:
+        if not self.enabled or x.size == 0:
+            return x
+        if x.dtype != np.float32:
+            x = x.astype(np.float32, copy=False)
+        if x.shape[1] != 2:
+            return x
+
+        width = self._width
+        if abs(width - 1.0) < 1e-6:
+            return x
+
+        mid = 0.5 * (x[:, 0] + x[:, 1])
+        side = 0.5 * (x[:, 0] - x[:, 1]) * width
+        y = np.empty_like(x)
+        y[:, 0] = mid + side
+        y[:, 1] = mid - side
+        return y
+
+
 class EffectsChain:
     def __init__(self, sample_rate: int, channels: int, effects: Optional[list[EffectProcessor]] = None):
         self.sample_rate = int(sample_rate)
@@ -1578,7 +1608,12 @@ class PlayerEngine(QtCore.QObject):
         self._dsp, self._dsp_name = make_dsp(sample_rate, channels)
         self._eq_dsp = EqualizerDSP(sample_rate, channels)
         self._reverb = ReverbEffect(sample_rate, channels)
-        self._fx_chain = EffectsChain(sample_rate, channels, effects=[GainEffect(), self._reverb])
+        self._stereo_widener = StereoWidenerEffect()
+        self._fx_chain = EffectsChain(
+            sample_rate,
+            channels,
+            effects=[GainEffect(), self._stereo_widener, self._reverb],
+        )
         self._decoder: Optional[DecoderThread] = None
 
         self._stream: Optional[sd.OutputStream] = None if sd else None
@@ -1593,6 +1628,7 @@ class PlayerEngine(QtCore.QObject):
         self._reverb_decay = 1.4
         self._reverb_predelay = 20.0
         self._reverb_wet = 0.25
+        self._stereo_width = 1.0
 
         self._seek_offset_sec = 0.0
         self._source_pos_sec = 0.0
@@ -1630,6 +1666,10 @@ class PlayerEngine(QtCore.QObject):
         self._reverb_predelay = clamp(float(pre_delay_ms), 0.0, 120.0)
         self._reverb_wet = clamp(float(wet), 0.0, 1.0)
         self._reverb.set_parameters(self._reverb_decay, self._reverb_predelay, self._reverb_wet)
+
+    def set_stereo_width(self, width: float) -> None:
+        self._stereo_width = clamp(float(width), 0.0, 2.0)
+        self._stereo_widener.set_width(self._stereo_width)
 
     def load_track(self, path: str):
         if not path or not os.path.exists(path):
@@ -2184,6 +2224,32 @@ class ReverbWidget(QtWidgets.QGroupBox):
         self.controlsChanged.emit(decay, predelay, mix)
 
 
+class StereoWidthWidget(QtWidgets.QGroupBox):
+    widthChanged = QtCore.Signal(float)  # width 0..2
+
+    def __init__(self, parent=None):
+        super().__init__("Stereo Width", parent)
+
+        self.width_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        self.width_slider.setRange(0, 200)
+        self.width_slider.setValue(100)
+        self.width_slider.setToolTip("Adjust stereo width (0% mono to 200% wide).")
+        self.width_slider.setAccessibleName("Stereo width")
+
+        self.width_label = QtWidgets.QLabel("Width: 100%")
+
+        layout = QtWidgets.QFormLayout(self)
+        layout.addRow(self.width_label, self.width_slider)
+
+        self.width_slider.valueChanged.connect(self._emit)
+        self._emit()
+
+    def _emit(self):
+        width = self.width_slider.value() / 100.0
+        self.width_label.setText(f"Width: {width * 100:.0f}%")
+        self.widthChanged.emit(width)
+
+
 class TransportWidget(QtWidgets.QWidget):
     playPauseToggled = QtCore.Signal(bool)
     stopClicked = QtCore.Signal()
@@ -2424,6 +2490,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.visualizer = VisualizerWidget(self.engine)
         self.dsp_widget = TempoPitchWidget()
         self.reverb_widget = ReverbWidget()
+        self.stereo_width_widget = StereoWidthWidget()
         self.equalizer = EqualizerWidget()
         self.playlist = PlaylistWidget()
 
@@ -2482,6 +2549,7 @@ class MainWindow(QtWidgets.QMainWindow):
         left.addWidget(self.visualizer)
         left.addWidget(self.dsp_widget)
         left.addWidget(self.reverb_widget)
+        left.addWidget(self.stereo_width_widget)
         left.addWidget(self.appearance_group)
         left.addWidget(self.header_frame)
         left.addStretch(1)
@@ -2572,6 +2640,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.reverb_widget.controlsChanged.connect(
             lambda decay, predelay, mix: self.engine.set_reverb_controls(decay, predelay, mix)
         )
+        self.stereo_width_widget.widthChanged.connect(self._on_stereo_width_changed)
+        self.stereo_width_widget.widthChanged.connect(self.engine.set_stereo_width)
 
         self.playlist.addFilesRequested.connect(self._on_add_files_requested)
         self.playlist.addFolderRequested.connect(self._add_folder_dialog)
@@ -2760,6 +2830,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.settings.setValue("reverb/decay", float(decay))
         self.settings.setValue("reverb/predelay", float(pre_delay_ms))
         self.settings.setValue("reverb/mix", float(mix))
+
+    def _on_stereo_width_changed(self, width: float):
+        self.settings.setValue("stereo/width", float(width))
 
     def _set_shuffle(self, on: bool):
         self._shuffle = bool(on)
@@ -2978,6 +3051,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.reverb_widget.predelay_slider.setValue(int(round(clamp(reverb_predelay, 0.0, 120.0))))
         self.reverb_widget.mix_slider.setValue(int(round(clamp(reverb_mix, 0.0, 1.0) * 100)))
 
+        stereo_width = self.settings.value("stereo/width", 1.0, type=float)
+        self.stereo_width_widget.width_slider.setValue(int(round(clamp(stereo_width, 0.0, 2.0) * 100)))
+
     def _apply_ui_settings(self):
         self.engine.set_volume(self.transport.volume_slider.value() / 100.0)
         self.engine.set_muted(self.transport.mute_btn.isChecked())
@@ -2995,6 +3071,7 @@ class MainWindow(QtWidgets.QMainWindow):
             float(self.reverb_widget.predelay_slider.value()),
             self.reverb_widget.mix_slider.value() / 100.0,
         )
+        self.engine.set_stereo_width(self.stereo_width_widget.width_slider.value() / 100.0)
 
     def _save_ui_settings(self):
         self.settings.setValue("audio/volume_slider", self.transport.volume_slider.value())
@@ -3009,6 +3086,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.settings.setValue("reverb/decay", self.reverb_widget.decay_slider.value() / 100.0)
         self.settings.setValue("reverb/predelay", float(self.reverb_widget.predelay_slider.value()))
         self.settings.setValue("reverb/mix", self.reverb_widget.mix_slider.value() / 100.0)
+        self.settings.setValue("stereo/width", self.stereo_width_widget.width_slider.value() / 100.0)
 
     @staticmethod
     def _normalize_eq_gains(values: object, band_count: int) -> list[float]:
