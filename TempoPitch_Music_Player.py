@@ -1250,7 +1250,7 @@ class DecoderThread(threading.Thread):
         low_watermark_frames = int(EQ_PROFILE_LOW_WATERMARK_SEC * self.sample_rate)
 
         try:
-            # Warm-up until ~0.5s buffered
+            # Warm-up until ~1.0s buffered
             while not self._stop.is_set():
                 b = stdout.read(self._read_bytes)
                 if not b:
@@ -1284,7 +1284,7 @@ class DecoderThread(threading.Thread):
                         profile_iter += 1
                 if y.size:
                     self.ring.push(y)
-                if self.ring.frames_available() > int(0.5 * self.sample_rate):
+                if self.ring.frames_available() > int(1.0 * self.sample_rate):
                     self._state_cb("ready", None)
                     break
 
@@ -1325,8 +1325,8 @@ class DecoderThread(threading.Thread):
 
                 # Backpressure: keep buffer in a healthy range.
                 # If the decoder gets too far ahead, it can make playback sound chaotic.
-                high = int(2.5 * self.sample_rate)
-                low = int(1.5 * self.sample_rate)
+                high = int(0.625 * self.ring.max_frames)
+                low = int(0.375 * self.ring.max_frames)
                 if self.ring.frames_available() > high:
                     while (not self._stop.is_set()) and self.ring.frames_available() > low:
                         time.sleep(0.02)
@@ -1366,7 +1366,7 @@ class PlayerEngine(QtCore.QObject):
         self.state = PlayerState.STOPPED
         self.track: Optional[Track] = None
 
-        self._ring = AudioRingBuffer(channels, max_seconds=4.0, sample_rate=sample_rate)
+        self._ring = AudioRingBuffer(channels, max_seconds=7.0, sample_rate=sample_rate)
         self._viz_buffer = VisualizerBuffer(channels, max_seconds=0.75, sample_rate=sample_rate)
         self._dsp, self._dsp_name = make_dsp(sample_rate, channels)
         self._eq_dsp = EqualizerDSP(sample_rate, channels)
