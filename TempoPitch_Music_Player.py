@@ -4542,7 +4542,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("PySide6 Tempo/Pitch Music Player (SoundTouch)")
-        self.resize(980, 640)
+        self.resize(1280, 640)
 
         self.settings = QtCore.QSettings("ChatGPT", "TempoPitchPlayer")
         self._theme_name = str(self.settings.value("ui/theme", "Ocean"))
@@ -4581,7 +4581,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.artwork_label = QtWidgets.QLabel("No Artwork")
         self.artwork_label.setObjectName("artwork_label")
         self.artwork_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-        self.artwork_label.setFixedSize(220, 220)
+        self.artwork_label.setFixedSize(100, 100)
         self.artwork_label.setWordWrap(True)
 
         self.status = QtWidgets.QLabel("Ready.")
