@@ -4468,6 +4468,10 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.header_frame = QtWidgets.QFrame()
         self.header_frame.setObjectName("header_frame")
+        self.header_frame.setSizePolicy(
+            QtWidgets.QSizePolicy.Preferred,
+            QtWidgets.QSizePolicy.Maximum,
+        )
         header_layout = QtWidgets.QVBoxLayout(self.header_frame)
         header_top_row = QtWidgets.QHBoxLayout()
         header_top_row.addWidget(self.artwork_label)
@@ -4525,11 +4529,11 @@ class MainWindow(QtWidgets.QMainWindow):
         left.setSpacing(12)
         left.addWidget(self.transport)
         left.addWidget(self.visualizer)
+        left.addWidget(self.header_frame)
         left.addWidget(self.dsp_widget)
         left.addWidget(self.effects_tabs)
         left.addWidget(self.audio_group)
         left.addWidget(self.appearance_group)
-        left.addWidget(self.header_frame)
         left.addStretch(1)
 
         leftw = QtWidgets.QWidget()
