@@ -2589,15 +2589,15 @@ class PlayerEngine(QtCore.QObject):
         self._viz_buffer = VisualizerBuffer(channels, max_seconds=0.75, sample_rate=sample_rate)
         self._dsp, self._dsp_name = make_dsp(sample_rate, channels)
         self._eq_dsp = EqualizerDSP(sample_rate, channels)
-        self._compressor = CompressorEffect(sample_rate, channels)
-        self._dynamic_eq = DynamicEqEffect(sample_rate, channels)
-        self._subharmonic = SubharmonicEffect(sample_rate, channels)
-        self._reverb = ReverbEffect(sample_rate, channels)
-        self._chorus = ChorusEffect(sample_rate, channels)
+        self._compressor = CompressorEffect(sample_rate, channels, enabled=False)
+        self._dynamic_eq = DynamicEqEffect(sample_rate, channels, enabled=False)
+        self._subharmonic = SubharmonicEffect(sample_rate, channels, enabled=False)
+        self._reverb = ReverbEffect(sample_rate, channels, enabled=False)
+        self._chorus = ChorusEffect(sample_rate, channels, enabled=False)
         self._stereo_widener = StereoWidenerEffect()
         self._stereo_panner = StereoPannerEffect(sample_rate, channels)
-        self._saturation = SaturationEffect(sample_rate, channels)
-        self._limiter = LimiterEffect(sample_rate, channels)
+        self._saturation = SaturationEffect(sample_rate, channels, enabled=False)
+        self._limiter = LimiterEffect(sample_rate, channels, enabled=False)
         self._fx_chain = EffectsChain(
             sample_rate,
             channels,
@@ -2626,34 +2626,34 @@ class PlayerEngine(QtCore.QObject):
             key_lock=True,
             tape_mode=False,
             eq_gains=tuple(0.0 for _ in self._eq_dsp.center_freqs),
-            compressor_threshold=-18.0,
-            compressor_ratio=4.0,
-            compressor_attack=10.0,
-            compressor_release=120.0,
+            compressor_threshold=0.0,
+            compressor_ratio=1.0,
+            compressor_attack=0.1,
+            compressor_release=1.0,
             compressor_makeup=0.0,
             dynamic_eq_freq=1000.0,
             dynamic_eq_q=1.0,
             dynamic_eq_gain=0.0,
-            dynamic_eq_threshold=-24.0,
-            dynamic_eq_ratio=4.0,
-            saturation_drive=6.0,
+            dynamic_eq_threshold=0.0,
+            dynamic_eq_ratio=1.0,
+            saturation_drive=0.0,
             saturation_trim=0.0,
             saturation_tone=0.0,
             saturation_tone_enabled=False,
-            subharmonic_mix=0.25,
-            subharmonic_intensity=0.6,
+            subharmonic_mix=0.0,
+            subharmonic_intensity=0.0,
             subharmonic_cutoff=140.0,
             reverb_decay=1.4,
             reverb_predelay=20.0,
-            reverb_wet=0.25,
+            reverb_wet=0.0,
             chorus_rate=0.8,
             chorus_depth=8.0,
-            chorus_mix=0.25,
+            chorus_mix=0.0,
             stereo_width=1.0,
             panner_azimuth=0.0,
             panner_spread=1.0,
-            limiter_threshold=-1.0,
-            limiter_release_ms=80.0,
+            limiter_threshold=0.0,
+            limiter_release_ms=None,
             version=0,
         )
 
