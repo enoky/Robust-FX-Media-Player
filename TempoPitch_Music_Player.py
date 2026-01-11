@@ -2737,6 +2737,7 @@ class PlayerEngine(QtCore.QObject):
         sample_rate: int = 44100,
         channels: int = 2,
         metrics_enabled: bool = True,
+        fx_enabled: Optional[dict[str, bool]] = None,
         parent=None,
     ):
         super().__init__(parent)
@@ -2784,6 +2785,9 @@ class PlayerEngine(QtCore.QObject):
                 self._limiter,
             ],
         )
+        if fx_enabled:
+            for name, enabled in fx_enabled.items():
+                self._fx_chain.enable_effect(name, enabled)
         self._decoder: Optional[DecoderThread] = None
 
         self._stream: Optional[sd.OutputStream] = None if sd else None
@@ -3018,6 +3022,12 @@ class PlayerEngine(QtCore.QObject):
             panner_azimuth=clamp(float(azimuth_deg), -90.0, 90.0),
             panner_spread=clamp(float(spread), 0.0, 1.0),
         )
+
+    def enable_effect(self, name: str, enabled: bool) -> None:
+        self._fx_chain.enable_effect(name, enabled)
+
+    def get_enabled_effects(self) -> list[str]:
+        return [effect.name for effect in self._fx_chain.effects if effect.enabled]
 
     def load_track(self, path: str):
         if not path or not os.path.exists(path):
@@ -4527,6 +4537,31 @@ class MainWindow(QtWidgets.QMainWindow):
         self.effects_tabs.addTab(self.stereo_width_widget, "Stereo Width")
         self.effects_tabs.addTab(self.equalizer, "Equalizer")
 
+        self.effects_toggle_group = QtWidgets.QGroupBox("FX Enable")
+        self.effects_toggle_group.setObjectName("effects_toggle_group")
+        effects_toggle_layout = QtWidgets.QGridLayout(self.effects_toggle_group)
+        effects_toggle_layout.setContentsMargins(8, 8, 8, 8)
+        effects_toggle_layout.setHorizontalSpacing(16)
+        effects_toggle_layout.setVerticalSpacing(6)
+        self.effect_toggles: dict[str, QtWidgets.QCheckBox] = {}
+        effect_names = [
+            "Compressor",
+            "Dynamic EQ",
+            "Subharmonic",
+            "Reverb",
+            "Chorus",
+            "Saturation",
+            "Limiter",
+        ]
+        for index, name in enumerate(effect_names):
+            checkbox = QtWidgets.QCheckBox(name)
+            checkbox.setAccessibleName(f"{name} enable")
+            checkbox.toggled.connect(lambda checked, effect_name=name: self._on_effect_toggled(effect_name, checked))
+            row = index // 2
+            col = index % 2
+            effects_toggle_layout.addWidget(checkbox, row, col)
+            self.effect_toggles[name] = checkbox
+
         left = QtWidgets.QVBoxLayout()
         left.setContentsMargins(16, 16, 16, 16)
         left.setSpacing(12)
@@ -4534,6 +4569,7 @@ class MainWindow(QtWidgets.QMainWindow):
         left.addWidget(self.visualizer)
         left.addWidget(self.header_frame)
         left.addWidget(self.dsp_widget)
+        left.addWidget(self.effects_toggle_group)
         left.addWidget(self.effects_tabs)
         left.addWidget(self.audio_group)
         left.addWidget(self.appearance_group)
@@ -4981,6 +5017,10 @@ class MainWindow(QtWidgets.QMainWindow):
     def _on_stereo_width_changed(self, width: float):
         self.settings.setValue("stereo/width", float(width))
 
+    def _on_effect_toggled(self, effect_name: str, enabled: bool) -> None:
+        self.engine.enable_effect(effect_name, enabled)
+        self.settings.setValue(self._effect_setting_key(effect_name), bool(enabled))
+
     def _set_shuffle(self, on: bool):
         self._shuffle = bool(on)
         self.settings.setValue("playback/shuffle", self._shuffle)
@@ -5326,6 +5366,14 @@ class MainWindow(QtWidgets.QMainWindow):
         stereo_width = self.settings.value("stereo/width", 1.0, type=float)
         self.stereo_width_widget.width_slider.setValue(int(round(clamp(stereo_width, 0.0, 2.0) * 100)))
 
+        enabled_effects = set(self.engine.get_enabled_effects())
+        for name, checkbox in self.effect_toggles.items():
+            enabled = self.settings.value(self._effect_setting_key(name), name in enabled_effects, type=bool)
+            checkbox.blockSignals(True)
+            checkbox.setChecked(bool(enabled))
+            checkbox.blockSignals(False)
+            self.engine.enable_effect(name, bool(enabled))
+
     def _apply_ui_settings(self):
         self.engine.set_volume(self.transport.volume_slider.value() / 100.0)
         self.engine.set_muted(self.transport.mute_btn.isChecked())
@@ -5435,6 +5483,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.settings.setValue("panner/azimuth", float(self.stereo_panner_widget.azimuth_slider.value()))
         self.settings.setValue("panner/spread", self.stereo_panner_widget.spread_slider.value() / 100.0)
         self.settings.setValue("stereo/width", self.stereo_width_widget.width_slider.value() / 100.0)
+        for name, checkbox in self.effect_toggles.items():
+            self.settings.setValue(self._effect_setting_key(name), checkbox.isChecked())
 
     @staticmethod
     def _normalize_eq_gains(values: object, band_count: int) -> list[float]:
@@ -5445,6 +5495,10 @@ class MainWindow(QtWidgets.QMainWindow):
         if len(gains) < band_count:
             gains.extend([0.0] * (band_count - len(gains)))
         return [float(g) for g in gains[:band_count]]
+
+    @staticmethod
+    def _effect_setting_key(name: str) -> str:
+        return f"effects/enabled/{name}"
 
     def _restore_playlist_session(self):
         saved_paths = self.settings.value("playlist/paths", [], type=list)
