@@ -378,6 +378,7 @@ class AudioRingBuffer:
         self.max_frames = int(max_seconds * sample_rate)
         self._dq: deque[np.ndarray] = deque()
         self._frames = 0
+        self._underruns = 0
         self._lock = threading.Lock()
 
     def clear(self) -> None:
@@ -428,7 +429,15 @@ class AudioRingBuffer:
                 else:
                     self._dq[0] = chunk[take:, :]
                 self._frames -= take
+            if idx < n:
+                self._underruns += 1
         return out
+
+    def consume_underruns(self) -> int:
+        with self._lock:
+            underruns = self._underruns
+            self._underruns = 0
+            return underruns
 
 
 # -----------------------------
@@ -2298,9 +2307,16 @@ class DecoderThread(threading.Thread):
         low_watermark_frames = int(EQ_PROFILE_LOW_WATERMARK_SEC * self.sample_rate)
         last_version = -1
         last_params: Optional[AudioParams] = None
+        PREBUFFER_SEC = 0.6
+        TARGET_SEC = 0.7
+        HIGH_SEC = 0.9
+        LOW_SEC = 0.5
+        UNDERRUN_STEP_SEC = 0.05
+        UNDERRUN_CAP_SEC = 0.3
+        underrun_extra_sec = 0.0
 
         try:
-            # Warm-up until ~1.0s buffered
+            # Warm-up until prebuffered
             while not self._stop.is_set():
                 last_version, last_params = self._check_audio_params(last_version, last_params)
                 b = stdout.read(self._read_bytes)
@@ -2337,13 +2353,19 @@ class DecoderThread(threading.Thread):
                     y = self._maybe_apply_fade_in(y)
                 if y.size:
                     self.ring.push(y)
-                if self.ring.frames_available() > int(1.0 * self.sample_rate):
+                if self.ring.frames_available() >= int(PREBUFFER_SEC * self.sample_rate):
                     self._state_cb("ready", None)
                     break
 
             # Main loop
             while not self._stop.is_set():
                 last_version, last_params = self._check_audio_params(last_version, last_params)
+                underruns = self.ring.consume_underruns()
+                if underruns:
+                    underrun_extra_sec = min(
+                        underrun_extra_sec + (UNDERRUN_STEP_SEC * underruns),
+                        UNDERRUN_CAP_SEC,
+                    )
                 b = stdout.read(self._read_bytes)
                 if not b:
                     break
@@ -2381,11 +2403,16 @@ class DecoderThread(threading.Thread):
 
                 # Backpressure: keep buffer in a healthy range.
                 # If the decoder gets too far ahead, it can make playback sound chaotic.
-                high = int(0.625 * self.ring.max_frames)
-                low = int(0.375 * self.ring.max_frames)
-                if self.ring.frames_available() > high:
-                    while (not self._stop.is_set()) and self.ring.frames_available() > low:
-                        time.sleep(0.02)
+                target_frames = int((TARGET_SEC + underrun_extra_sec) * self.sample_rate)
+                high_frames = int((HIGH_SEC + underrun_extra_sec) * self.sample_rate)
+                low_frames = int((LOW_SEC + underrun_extra_sec) * self.sample_rate)
+                max_target = int(self.ring.max_frames * 0.95)
+                target_frames = min(max(target_frames, low_frames), max_target)
+                high_frames = min(high_frames, self.ring.max_frames)
+                low_frames = min(low_frames, target_frames)
+                if self.ring.frames_available() > high_frames:
+                    while (not self._stop.is_set()) and self.ring.frames_available() > target_frames:
+                        time.sleep(0.01)
 
             # EOF: flush DSP tail
             tail = self.dsp.flush()
@@ -2424,7 +2451,7 @@ class PlayerEngine(QtCore.QObject):
         self.state = PlayerState.STOPPED
         self.track: Optional[Track] = None
 
-        self._ring = AudioRingBuffer(channels, max_seconds=7.0, sample_rate=sample_rate)
+        self._ring = AudioRingBuffer(channels, max_seconds=1.25, sample_rate=sample_rate)
         self._viz_buffer = VisualizerBuffer(channels, max_seconds=0.75, sample_rate=sample_rate)
         self._dsp, self._dsp_name = make_dsp(sample_rate, channels)
         self._eq_dsp = EqualizerDSP(sample_rate, channels)
