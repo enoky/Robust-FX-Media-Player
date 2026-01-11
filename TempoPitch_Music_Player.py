@@ -1803,6 +1803,11 @@ class EqualizerWidget(QtWidgets.QGroupBox):
 
         self.reset_btn = QtWidgets.QPushButton("Reset")
 
+        self._gains_timer = QtCore.QTimer(self)
+        self._gains_timer.setSingleShot(True)
+        self._gains_timer.setInterval(75)
+        self._gains_timer.timeout.connect(self._emit_gains)
+
         header = QtWidgets.QHBoxLayout()
         header.addWidget(QtWidgets.QLabel("Presets"))
         header.addWidget(self.presets)
@@ -1843,6 +1848,7 @@ class EqualizerWidget(QtWidgets.QGroupBox):
         self.presets.currentTextChanged.connect(self._on_preset_changed)
         for slider in self.band_sliders:
             slider.valueChanged.connect(self._on_slider_changed)
+            slider.sliderReleased.connect(self._on_slider_released)
 
         self._apply_gains(self.presets_map["Flat"], emit=False)
 
@@ -1861,6 +1867,10 @@ class EqualizerWidget(QtWidgets.QGroupBox):
             self.presets.blockSignals(True)
             self.presets.setCurrentText("Custom")
             self.presets.blockSignals(False)
+        self._gains_timer.start()
+
+    def _on_slider_released(self):
+        self._gains_timer.stop()
         self._emit_gains()
 
     def _apply_gains(self, gains: list[float], emit: bool = True):
@@ -1871,6 +1881,7 @@ class EqualizerWidget(QtWidgets.QGroupBox):
             slider.setValue(int(round(clamp(float(gain), -12.0, 12.0))))
             slider.blockSignals(False)
         if emit:
+            self._gains_timer.stop()
             self._emit_gains()
 
     def _emit_gains(self):
