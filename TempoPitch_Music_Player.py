@@ -682,6 +682,20 @@ class EqualizerDSP:
         old_gains = self._gains_db
         if new_gains == old_gains:
             return
+        if all(abs(gain_db) <= 1e-3 for gain_db in new_gains):
+            config = EqConfig(
+                sos=np.zeros((0, 6), dtype=np.float32),
+                zi=np.zeros((0, self.ch, 2), dtype=np.float32),
+                reset_mask=np.zeros((0,), dtype=bool),
+            )
+            with self._lock:
+                if new_gains == self._gains_db:
+                    return
+                self._gains_db = new_gains
+                self._config = config
+                self._pending_reset = False
+                self._reset_all = False
+            return
         config, reset_mask = self._compute_config(new_gains, old_gains)
         pending_reset = bool(reset_mask.any())
         with self._lock:
@@ -761,8 +775,9 @@ class EqualizerDSP:
             return x
         if x.dtype != np.float32:
             x = x.astype(np.float32, copy=False)
-        y = np.array(x, copy=True)
         config = self._config
+        if config.sos.shape[0] == 0 and not self._pending_reset:
+            return x
         if self._pending_reset:
             if self._reset_all:
                 config.zi.fill(0.0)
@@ -771,7 +786,8 @@ class EqualizerDSP:
             self._pending_reset = False
             self._reset_all = False
         if config.sos.shape[0] == 0:
-            return y
+            return x
+        y = np.array(x, copy=True)
         if sosfilt is not None:
             for ch in range(self.ch):
                 y[:, ch], zi = sosfilt(config.sos, y[:, ch], zi=config.zi[:, ch, :])
