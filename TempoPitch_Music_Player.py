@@ -4586,6 +4586,9 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.status = QtWidgets.QLabel("Ready.")
         self.status.setObjectName("status_label")
+        self.fx_status = QtWidgets.QLabel("Enabled FX: None")
+        self.fx_status.setObjectName("fx_status_label")
+        self.fx_status.setWordWrap(True)
 
         self.header_frame = QtWidgets.QFrame()
         self.header_frame.setObjectName("header_frame")
@@ -4599,6 +4602,7 @@ class MainWindow(QtWidgets.QMainWindow):
         header_text_column = QtWidgets.QVBoxLayout()
         header_text_column.addWidget(self.now_playing)
         header_text_column.addWidget(self.status)
+        header_text_column.addWidget(self.fx_status)
         header_text_column.addStretch(1)
         header_top_row.addLayout(header_text_column)
         header_layout.addLayout(header_top_row)
@@ -4866,6 +4870,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._initial_warnings()
         self._restore_playlist_session()
         self._on_state_changed(self.engine.state)
+        self._update_enabled_fx_label()
         self._schedule_debug_autoplay()
 
     def _schedule_debug_autoplay(self) -> None:
@@ -5132,6 +5137,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def _on_effect_toggled(self, effect_name: str, enabled: bool) -> None:
         self.engine.enable_effect(effect_name, enabled)
         self.settings.setValue(self._effect_setting_key(effect_name), bool(enabled))
+        self._update_enabled_fx_label()
 
     def _on_effect_auto_enabled(self, effect_name: str) -> None:
         checkbox = self.effect_toggles.get(effect_name)
@@ -5141,6 +5147,7 @@ class MainWindow(QtWidgets.QMainWindow):
         checkbox.setChecked(True)
         checkbox.blockSignals(False)
         self.settings.setValue(self._effect_setting_key(effect_name), True)
+        self._update_enabled_fx_label()
 
     def _set_shuffle(self, on: bool):
         self._shuffle = bool(on)
@@ -5314,9 +5321,17 @@ class MainWindow(QtWidgets.QMainWindow):
         elif self.engine.state == PlayerState.STOPPED:
             self.status.setText(f"{self.engine.dsp_name()} | Stopped")
 
+        self._update_enabled_fx_label()
+
         # Auto-advance (best-effort)
         if self._dur > 0 and pos >= self._dur - 0.25 and self.engine.state == PlayerState.PLAYING:
             self._advance_track(direction=1, auto=True)
+
+    def _update_enabled_fx_label(self) -> None:
+        enabled = self.engine.get_enabled_effects()
+        label_text = f"Enabled FX: {', '.join(enabled)}" if enabled else "Enabled FX: None"
+        if self.fx_status.text() != label_text:
+            self.fx_status.setText(label_text)
 
     def closeEvent(self, e: QtGui.QCloseEvent):
         self._save_ui_settings()
@@ -5494,6 +5509,7 @@ class MainWindow(QtWidgets.QMainWindow):
             checkbox.setChecked(bool(enabled))
             checkbox.blockSignals(False)
             self.engine.enable_effect(name, bool(enabled))
+        self._update_enabled_fx_label()
 
     def _apply_ui_settings(self):
         self.engine.set_volume(self.transport.volume_slider.value() / 100.0)
