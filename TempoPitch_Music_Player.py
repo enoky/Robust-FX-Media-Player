@@ -797,6 +797,159 @@ class CompressorEffect(EffectProcessor):
         return out
 
 
+class DynamicEqEffect(EffectProcessor):
+    name = "Dynamic EQ"
+
+    def __init__(
+        self,
+        sample_rate: int,
+        channels: int,
+        freq_hz: float = 1000.0,
+        q: float = 1.0,
+        gain_db: float = 0.0,
+        threshold_db: float = -24.0,
+        ratio: float = 4.0,
+        enabled: bool = True,
+    ):
+        super().__init__(enabled=enabled)
+        self.sample_rate = int(sample_rate)
+        self.channels = int(channels)
+        self._freq_hz = float(freq_hz)
+        self._q = float(q)
+        self._gain_db = float(gain_db)
+        self._threshold_db = float(threshold_db)
+        self._ratio = float(ratio)
+        self._detector_z1 = 0.0
+        self._detector_z2 = 0.0
+        self._detector_env = 0.0
+        self._filter_zi = np.zeros((self.channels, 2), dtype=np.float32)
+        self._attack_coeff = math.exp(-1.0 / (self.sample_rate * 0.01))
+        self._release_coeff = math.exp(-1.0 / (self.sample_rate * 0.12))
+        self._bandpass_coeffs = (0.0, 0.0, 0.0, 0.0, 0.0)
+        self._peaking_coeffs = (0.0, 0.0, 0.0, 0.0, 0.0)
+        self._last_gain_db = None
+        self._update_coeffs(force=True)
+
+    def reset(self) -> None:
+        self._detector_z1 = 0.0
+        self._detector_z2 = 0.0
+        self._detector_env = 0.0
+        self._filter_zi.fill(0.0)
+
+    def set_parameters(
+        self,
+        freq_hz: float,
+        q: float,
+        gain_db: float,
+        threshold_db: float,
+        ratio: float,
+    ) -> None:
+        self._freq_hz = clamp(float(freq_hz), 20.0, min(20000.0, self.sample_rate * 0.45))
+        self._q = clamp(float(q), 0.1, 20.0)
+        self._gain_db = clamp(float(gain_db), -12.0, 12.0)
+        self._threshold_db = clamp(float(threshold_db), -60.0, 0.0)
+        self._ratio = clamp(float(ratio), 1.0, 20.0)
+        self._update_coeffs(force=True)
+
+    def _update_coeffs(self, *, force: bool = False) -> None:
+        if force or self._bandpass_coeffs == (0.0, 0.0, 0.0, 0.0, 0.0):
+            self._bandpass_coeffs = self._make_bandpass_coeffs(self._freq_hz, self._q)
+        if force or self._last_gain_db is None:
+            self._last_gain_db = None
+            self._peaking_coeffs = self._make_peaking_coeffs(self._freq_hz, self._q, self._gain_db)
+
+    def _make_bandpass_coeffs(self, freq_hz: float, q: float) -> tuple[float, float, float, float, float]:
+        w0 = 2.0 * math.pi * freq_hz / float(self.sample_rate)
+        cos_w0 = math.cos(w0)
+        sin_w0 = math.sin(w0)
+        alpha = sin_w0 / (2.0 * q)
+
+        b0 = alpha
+        b1 = 0.0
+        b2 = -alpha
+        a0 = 1.0 + alpha
+        a1 = -2.0 * cos_w0
+        a2 = 1.0 - alpha
+
+        b0 /= a0
+        b1 /= a0
+        b2 /= a0
+        a1 /= a0
+        a2 /= a0
+        return b0, b1, b2, a1, a2
+
+    def _make_peaking_coeffs(self, freq_hz: float, q: float, gain_db: float) -> tuple[float, float, float, float, float]:
+        A = 10.0 ** (gain_db / 40.0)
+        w0 = 2.0 * math.pi * freq_hz / float(self.sample_rate)
+        cos_w0 = math.cos(w0)
+        sin_w0 = math.sin(w0)
+        alpha = sin_w0 / (2.0 * q)
+
+        b0 = 1.0 + alpha * A
+        b1 = -2.0 * cos_w0
+        b2 = 1.0 - alpha * A
+        a0 = 1.0 + alpha / A
+        a1 = -2.0 * cos_w0
+        a2 = 1.0 - alpha / A
+
+        b0 /= a0
+        b1 /= a0
+        b2 /= a0
+        a1 /= a0
+        a2 /= a0
+        return b0, b1, b2, a1, a2
+
+    def process(self, x: np.ndarray) -> np.ndarray:
+        if not self.enabled or x.size == 0:
+            return x
+        if x.dtype != np.float32:
+            x = x.astype(np.float32, copy=False)
+
+        mono = x.mean(axis=1)
+        b0, b1, b2, a1, a2 = self._bandpass_coeffs
+        z1 = self._detector_z1
+        z2 = self._detector_z2
+        env = self._detector_env
+
+        for sample in mono:
+            y = b0 * sample + z1
+            z1 = b1 * sample - a1 * y + z2
+            z2 = b2 * sample - a2 * y
+            amp = abs(y)
+            coeff = self._attack_coeff if amp > env else self._release_coeff
+            env = coeff * env + (1.0 - coeff) * amp
+
+        self._detector_z1 = z1
+        self._detector_z2 = z2
+        self._detector_env = env
+
+        env_db = 20.0 * math.log10(max(env, 1e-8))
+        if env_db <= self._threshold_db:
+            dynamic_gain_db = 0.0
+        else:
+            dynamic_gain_db = self._threshold_db + (env_db - self._threshold_db) / self._ratio - env_db
+
+        total_gain_db = clamp(self._gain_db + dynamic_gain_db, -18.0, 18.0)
+        if self._last_gain_db is None or abs(total_gain_db - self._last_gain_db) > 1e-3:
+            self._peaking_coeffs = self._make_peaking_coeffs(self._freq_hz, self._q, total_gain_db)
+            self._last_gain_db = total_gain_db
+
+        b0, b1, b2, a1, a2 = self._peaking_coeffs
+        out = np.empty_like(x)
+        for ch in range(self.channels):
+            z1 = float(self._filter_zi[ch, 0])
+            z2 = float(self._filter_zi[ch, 1])
+            for i in range(x.shape[0]):
+                sample = x[i, ch]
+                y = b0 * sample + z1
+                z1 = b1 * sample - a1 * y + z2
+                z2 = b2 * sample - a2 * y
+                out[i, ch] = y
+            self._filter_zi[ch, 0] = z1
+            self._filter_zi[ch, 1] = z2
+        return out
+
+
 class LimiterEffect(EffectProcessor):
     name = "Limiter"
 
@@ -2154,6 +2307,7 @@ class PlayerEngine(QtCore.QObject):
         self._dsp, self._dsp_name = make_dsp(sample_rate, channels)
         self._eq_dsp = EqualizerDSP(sample_rate, channels)
         self._compressor = CompressorEffect(sample_rate, channels)
+        self._dynamic_eq = DynamicEqEffect(sample_rate, channels)
         self._subharmonic = SubharmonicEffect(sample_rate, channels)
         self._reverb = ReverbEffect(sample_rate, channels)
         self._chorus = ChorusEffect(sample_rate, channels)
@@ -2167,6 +2321,7 @@ class PlayerEngine(QtCore.QObject):
             effects=[
                 GainEffect(),
                 self._compressor,
+                self._dynamic_eq,
                 self._subharmonic,
                 self._chorus,
                 self._stereo_panner,
@@ -2201,6 +2356,11 @@ class PlayerEngine(QtCore.QObject):
         self._compressor_attack = 10.0
         self._compressor_release = 120.0
         self._compressor_makeup = 0.0
+        self._dynamic_eq_freq = 1000.0
+        self._dynamic_eq_q = 1.0
+        self._dynamic_eq_gain = 0.0
+        self._dynamic_eq_threshold = -24.0
+        self._dynamic_eq_ratio = 4.0
         self._saturation_drive = 6.0
         self._saturation_trim = 0.0
         self._saturation_tone = 0.0
@@ -2261,6 +2421,27 @@ class PlayerEngine(QtCore.QObject):
             self._compressor_attack,
             self._compressor_release,
             self._compressor_makeup,
+        )
+
+    def set_dynamic_eq_controls(
+        self,
+        freq_hz: float,
+        q: float,
+        gain_db: float,
+        threshold_db: float,
+        ratio: float,
+    ) -> None:
+        self._dynamic_eq_freq = clamp(float(freq_hz), 20.0, 20000.0)
+        self._dynamic_eq_q = clamp(float(q), 0.1, 20.0)
+        self._dynamic_eq_gain = clamp(float(gain_db), -12.0, 12.0)
+        self._dynamic_eq_threshold = clamp(float(threshold_db), -60.0, 0.0)
+        self._dynamic_eq_ratio = clamp(float(ratio), 1.0, 20.0)
+        self._dynamic_eq.set_parameters(
+            self._dynamic_eq_freq,
+            self._dynamic_eq_q,
+            self._dynamic_eq_gain,
+            self._dynamic_eq_threshold,
+            self._dynamic_eq_ratio,
         )
 
     def get_compressor_gain_reduction_db(self) -> Optional[float]:
@@ -2367,6 +2548,13 @@ class PlayerEngine(QtCore.QObject):
             self._compressor_attack,
             self._compressor_release,
             self._compressor_makeup,
+        )
+        self._dynamic_eq.set_parameters(
+            self._dynamic_eq_freq,
+            self._dynamic_eq_q,
+            self._dynamic_eq_gain,
+            self._dynamic_eq_threshold,
+            self._dynamic_eq_ratio,
         )
         self._saturation.set_parameters(
             self._saturation_drive,
@@ -3016,6 +3204,103 @@ class StereoPannerWidget(QtWidgets.QGroupBox):
         self.controlsChanged.emit(azimuth, spread)
 
 
+class DynamicEqWidget(QtWidgets.QGroupBox):
+    controlsChanged = QtCore.Signal(float, float, float, float, float)
+
+    def __init__(self, parent=None):
+        super().__init__("Dynamic EQ", parent)
+
+        self._freq_min = 20.0
+        self._freq_max = 20000.0
+
+        self.freq_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        self.freq_slider.setRange(0, 1000)
+        self.freq_slider.setValue(self._freq_to_slider(1000.0))
+        self.freq_slider.setToolTip("Set center frequency (20 Hz to 20 kHz).")
+        self.freq_slider.setAccessibleName("Dynamic EQ frequency")
+
+        self.q_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        self.q_slider.setRange(10, 200)
+        self.q_slider.setValue(10)
+        self.q_slider.setToolTip("Set Q (0.1 to 20.0).")
+        self.q_slider.setAccessibleName("Dynamic EQ Q")
+
+        self.gain_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        self.gain_slider.setRange(-120, 120)
+        self.gain_slider.setValue(0)
+        self.gain_slider.setToolTip("Set base gain (-12 dB to +12 dB).")
+        self.gain_slider.setAccessibleName("Dynamic EQ gain")
+
+        self.threshold_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        self.threshold_slider.setRange(-600, 0)
+        self.threshold_slider.setValue(-240)
+        self.threshold_slider.setToolTip("Set threshold (-60 dB to 0 dB).")
+        self.threshold_slider.setAccessibleName("Dynamic EQ threshold")
+
+        self.ratio_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        self.ratio_slider.setRange(10, 200)
+        self.ratio_slider.setValue(40)
+        self.ratio_slider.setToolTip("Set ratio (1:1 to 20:1).")
+        self.ratio_slider.setAccessibleName("Dynamic EQ ratio")
+
+        self.freq_label = QtWidgets.QLabel("Freq: 1.00 kHz")
+        self.q_label = QtWidgets.QLabel("Q: 1.0")
+        self.gain_label = QtWidgets.QLabel("Gain: +0.0 dB")
+        self.threshold_label = QtWidgets.QLabel("Threshold: -24.0 dB")
+        self.ratio_label = QtWidgets.QLabel("Ratio: 4.0:1")
+
+        form = QtWidgets.QFormLayout()
+        form.addRow(self.freq_label, self.freq_slider)
+        form.addRow(self.q_label, self.q_slider)
+        form.addRow(self.gain_label, self.gain_slider)
+        form.addRow(self.threshold_label, self.threshold_slider)
+        form.addRow(self.ratio_label, self.ratio_slider)
+
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.addLayout(form)
+
+        self.freq_slider.valueChanged.connect(self._emit)
+        self.q_slider.valueChanged.connect(self._emit)
+        self.gain_slider.valueChanged.connect(self._emit)
+        self.threshold_slider.valueChanged.connect(self._emit)
+        self.ratio_slider.valueChanged.connect(self._emit)
+
+        self._emit()
+
+    def _freq_to_slider(self, freq: float) -> int:
+        freq = clamp(float(freq), self._freq_min, self._freq_max)
+        log_min = math.log10(self._freq_min)
+        log_max = math.log10(self._freq_max)
+        pos = (math.log10(freq) - log_min) / (log_max - log_min)
+        return int(round(pos * 1000.0))
+
+    def _slider_to_freq(self, value: int) -> float:
+        pos = clamp(float(value) / 1000.0, 0.0, 1.0)
+        log_min = math.log10(self._freq_min)
+        log_max = math.log10(self._freq_max)
+        return float(10.0 ** (log_min + pos * (log_max - log_min)))
+
+    def _format_freq(self, freq: float) -> str:
+        if freq >= 1000.0:
+            return f"{freq / 1000.0:.2f} kHz"
+        return f"{freq:.0f} Hz"
+
+    def _emit(self):
+        freq = self._slider_to_freq(self.freq_slider.value())
+        q = self.q_slider.value() / 10.0
+        gain = self.gain_slider.value() / 10.0
+        threshold = self.threshold_slider.value() / 10.0
+        ratio = self.ratio_slider.value() / 10.0
+
+        self.freq_label.setText(f"Freq: {self._format_freq(freq)}")
+        self.q_label.setText(f"Q: {q:.1f}")
+        self.gain_label.setText(f"Gain: {gain:+.1f} dB")
+        self.threshold_label.setText(f"Threshold: {threshold:.1f} dB")
+        self.ratio_label.setText(f"Ratio: {ratio:.1f}:1")
+
+        self.controlsChanged.emit(freq, q, gain, threshold, ratio)
+
+
 class CompressorWidget(QtWidgets.QGroupBox):
     controlsChanged = QtCore.Signal(float, float, float, float, float)
 
@@ -3549,6 +3834,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.transport = TransportWidget()
         self.visualizer = VisualizerWidget(self.engine)
         self.dsp_widget = TempoPitchWidget()
+        self.dynamic_eq_widget = DynamicEqWidget()
         self.compressor_widget = CompressorWidget()
         self.saturation_widget = SaturationWidget()
         self.subharmonic_widget = SubharmonicWidget()
@@ -3614,6 +3900,7 @@ class MainWindow(QtWidgets.QMainWindow):
         left.addWidget(self.transport)
         left.addWidget(self.visualizer)
         left.addWidget(self.dsp_widget)
+        left.addWidget(self.dynamic_eq_widget)
         left.addWidget(self.compressor_widget)
         left.addWidget(self.saturation_widget)
         left.addWidget(self.subharmonic_widget)
@@ -3708,6 +3995,16 @@ class MainWindow(QtWidgets.QMainWindow):
         self.dsp_widget.controlsChanged.connect(self._on_dsp_controls_changed)
 
         self.equalizer.gainsChanged.connect(self._on_eq_gains_changed)
+        self.dynamic_eq_widget.controlsChanged.connect(self._on_dynamic_eq_controls_changed)
+        self.dynamic_eq_widget.controlsChanged.connect(
+            lambda freq, q, gain, threshold, ratio: self.engine.set_dynamic_eq_controls(
+                freq,
+                q,
+                gain,
+                threshold,
+                ratio,
+            )
+        )
         self.compressor_widget.controlsChanged.connect(self._on_compressor_controls_changed)
         self.compressor_widget.controlsChanged.connect(
             lambda threshold, ratio, attack, release, makeup: self.engine.set_compressor_controls(
@@ -3937,6 +4234,20 @@ class MainWindow(QtWidgets.QMainWindow):
         self.engine.set_eq_gains(gains_db)
         self.settings.setValue("eq/gains", gains_db)
         self.settings.setValue("eq/preset", self.equalizer.presets.currentText())
+
+    def _on_dynamic_eq_controls_changed(
+        self,
+        freq_hz: float,
+        q: float,
+        gain_db: float,
+        threshold_db: float,
+        ratio: float,
+    ):
+        self.settings.setValue("dynamic_eq/freq", float(freq_hz))
+        self.settings.setValue("dynamic_eq/q", float(q))
+        self.settings.setValue("dynamic_eq/gain", float(gain_db))
+        self.settings.setValue("dynamic_eq/threshold", float(threshold_db))
+        self.settings.setValue("dynamic_eq/ratio", float(ratio))
 
     def _on_compressor_controls_changed(
         self,
@@ -4202,6 +4513,30 @@ class MainWindow(QtWidgets.QMainWindow):
         else:
             self.equalizer.set_gains(eq_gains, preset="Custom", emit=False)
 
+        dynamic_eq_freq = self.settings.value("dynamic_eq/freq", 1000.0, type=float)
+        dynamic_eq_q = self.settings.value("dynamic_eq/q", 1.0, type=float)
+        dynamic_eq_gain = self.settings.value("dynamic_eq/gain", 0.0, type=float)
+        dynamic_eq_threshold = self.settings.value("dynamic_eq/threshold", -24.0, type=float)
+        dynamic_eq_ratio = self.settings.value("dynamic_eq/ratio", 4.0, type=float)
+
+        self.dynamic_eq_widget.freq_slider.setValue(
+            self.dynamic_eq_widget._freq_to_slider(
+                clamp(dynamic_eq_freq, 20.0, 20000.0)
+            )
+        )
+        self.dynamic_eq_widget.q_slider.setValue(
+            int(round(clamp(dynamic_eq_q, 0.1, 20.0) * 10))
+        )
+        self.dynamic_eq_widget.gain_slider.setValue(
+            int(round(clamp(dynamic_eq_gain, -12.0, 12.0) * 10))
+        )
+        self.dynamic_eq_widget.threshold_slider.setValue(
+            int(round(clamp(dynamic_eq_threshold, -60.0, 0.0) * 10))
+        )
+        self.dynamic_eq_widget.ratio_slider.setValue(
+            int(round(clamp(dynamic_eq_ratio, 1.0, 20.0) * 10))
+        )
+
         compressor_threshold = self.settings.value("compressor/threshold", -18.0, type=float)
         compressor_ratio = self.settings.value("compressor/ratio", 4.0, type=float)
         compressor_attack = self.settings.value("compressor/attack", 10.0, type=float)
@@ -4307,6 +4642,13 @@ class MainWindow(QtWidgets.QMainWindow):
             self.dsp_widget.tape_mode.isChecked(),
         )
         self.engine.set_eq_gains(self.equalizer.gains())
+        self.engine.set_dynamic_eq_controls(
+            self.dynamic_eq_widget._slider_to_freq(self.dynamic_eq_widget.freq_slider.value()),
+            self.dynamic_eq_widget.q_slider.value() / 10.0,
+            self.dynamic_eq_widget.gain_slider.value() / 10.0,
+            self.dynamic_eq_widget.threshold_slider.value() / 10.0,
+            self.dynamic_eq_widget.ratio_slider.value() / 10.0,
+        )
         self.engine.set_compressor_controls(
             self.compressor_widget.threshold_slider.value() / 10.0,
             self.compressor_widget.ratio_slider.value() / 10.0,
@@ -4360,6 +4702,16 @@ class MainWindow(QtWidgets.QMainWindow):
         self.settings.setValue("dsp/lock_432", self.dsp_widget.lock_432.isChecked())
         self.settings.setValue("eq/gains", self.equalizer.gains())
         self.settings.setValue("eq/preset", self.equalizer.presets.currentText())
+        self.settings.setValue(
+            "dynamic_eq/freq",
+            self.dynamic_eq_widget._slider_to_freq(self.dynamic_eq_widget.freq_slider.value()),
+        )
+        self.settings.setValue("dynamic_eq/q", self.dynamic_eq_widget.q_slider.value() / 10.0)
+        self.settings.setValue("dynamic_eq/gain", self.dynamic_eq_widget.gain_slider.value() / 10.0)
+        self.settings.setValue(
+            "dynamic_eq/threshold", self.dynamic_eq_widget.threshold_slider.value() / 10.0
+        )
+        self.settings.setValue("dynamic_eq/ratio", self.dynamic_eq_widget.ratio_slider.value() / 10.0)
         self.settings.setValue("compressor/threshold", self.compressor_widget.threshold_slider.value() / 10.0)
         self.settings.setValue("compressor/ratio", self.compressor_widget.ratio_slider.value() / 10.0)
         self.settings.setValue("compressor/attack", self.compressor_widget.attack_slider.value() / 10.0)
