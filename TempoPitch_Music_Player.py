@@ -672,6 +672,88 @@ class EqualizerDSP:
 
 
 # -----------------------------
+# Modular DSP effects chain
+# -----------------------------
+
+class EffectProcessor:
+    name = "Effect"
+
+    def __init__(self, enabled: bool = True):
+        self.enabled = bool(enabled)
+
+    def reset(self) -> None:
+        return None
+
+    def process(self, x: np.ndarray) -> np.ndarray:
+        return x
+
+
+class GainEffect(EffectProcessor):
+    name = "Gain"
+
+    def __init__(self, gain_db: float = 0.0, enabled: bool = False):
+        super().__init__(enabled=enabled)
+        self._gain_db = float(gain_db)
+
+    def set_gain_db(self, gain_db: float) -> None:
+        self._gain_db = float(gain_db)
+
+    def process(self, x: np.ndarray) -> np.ndarray:
+        if not self.enabled or x.size == 0:
+            return x
+        gain = 10.0 ** (self._gain_db / 20.0)
+        return x * gain
+
+
+class EffectsChain:
+    def __init__(self, sample_rate: int, channels: int, effects: Optional[list[EffectProcessor]] = None):
+        self.sample_rate = int(sample_rate)
+        self.channels = int(channels)
+        self.effects: list[EffectProcessor] = list(effects or [])
+
+    def set_effects(self, effects: list[EffectProcessor]) -> None:
+        self.effects = list(effects)
+
+    def set_effect_order(self, names: list[str]) -> None:
+        name_map = {effect.name: effect for effect in self.effects}
+        ordered = []
+        for name in names:
+            effect = name_map.pop(name, None)
+            if effect is not None:
+                ordered.append(effect)
+        ordered.extend(name_map.values())
+        self.effects = ordered
+
+    def enable_effect(self, name: str, enabled: bool) -> None:
+        for effect in self.effects:
+            if effect.name == name:
+                effect.enabled = bool(enabled)
+                return
+
+    def reset(self) -> None:
+        for effect in self.effects:
+            effect.reset()
+
+    def _validate_audio(self, x: np.ndarray) -> np.ndarray:
+        if x.size == 0:
+            return x
+        if x.ndim != 2 or x.shape[1] != self.channels:
+            raise ValueError(f"EffectsChain expects (n,{self.channels}) float32")
+        if x.dtype != np.float32:
+            return x.astype(np.float32, copy=False)
+        return x
+
+    def process(self, x: np.ndarray) -> np.ndarray:
+        x = self._validate_audio(x)
+        for effect in self.effects:
+            if not effect.enabled:
+                continue
+            x = effect.process(x)
+            x = self._validate_audio(x)
+        return x
+
+
+# -----------------------------
 # SoundTouch DSP (ctypes)
 # -----------------------------
 
@@ -1197,7 +1279,7 @@ def make_ffmpeg_cmd(path: str, start_sec: float, sample_rate: int, channels: int
 
 class DecoderThread(threading.Thread):
     """
-    Reads float32 PCM from ffmpeg, processes DSP, pushes into ring buffer.
+    Reads float32 PCM from ffmpeg, processes DSP/effects, pushes into ring buffer.
     """
     def __init__(self,
                  track_path: str,
@@ -1207,6 +1289,7 @@ class DecoderThread(threading.Thread):
                  ring: AudioRingBuffer,
                  dsp: DSPBase,
                  eq_dsp: EqualizerDSP,
+                 fx_chain: EffectsChain,
                  state_cb):
         super().__init__(daemon=True)
         self.track_path = track_path
@@ -1216,6 +1299,7 @@ class DecoderThread(threading.Thread):
         self.ring = ring
         self.dsp = dsp
         self.eq_dsp = eq_dsp
+        self.fx_chain = fx_chain
         self._stop = threading.Event()
         self._proc: Optional[subprocess.Popen] = None
         self._state_cb = state_cb
@@ -1282,6 +1366,7 @@ class DecoderThread(threading.Thread):
                                 self.ring.frames_available(),
                             )
                         profile_iter += 1
+                    y = self.fx_chain.process(y)
                 if y.size:
                     self.ring.push(y)
                 if self.ring.frames_available() > int(1.0 * self.sample_rate):
@@ -1320,6 +1405,7 @@ class DecoderThread(threading.Thread):
                                 self.ring.frames_available(),
                             )
                         profile_iter += 1
+                    y = self.fx_chain.process(y)
                 if y.size:
                     self.ring.push(y)
 
@@ -1334,6 +1420,8 @@ class DecoderThread(threading.Thread):
             # EOF: flush DSP tail
             tail = self.dsp.flush()
             if tail.size:
+                tail = self.eq_dsp.process(tail)
+                tail = self.fx_chain.process(tail)
                 self.ring.push(tail)
 
         except Exception as e:
@@ -1370,6 +1458,7 @@ class PlayerEngine(QtCore.QObject):
         self._viz_buffer = VisualizerBuffer(channels, max_seconds=0.75, sample_rate=sample_rate)
         self._dsp, self._dsp_name = make_dsp(sample_rate, channels)
         self._eq_dsp = EqualizerDSP(sample_rate, channels)
+        self._fx_chain = EffectsChain(sample_rate, channels, effects=[GainEffect()])
         self._decoder: Optional[DecoderThread] = None
 
         self._stream: Optional[sd.OutputStream] = None if sd else None
@@ -1473,6 +1562,7 @@ class PlayerEngine(QtCore.QObject):
             ring=self._ring,
             dsp=self._dsp,
             eq_dsp=self._eq_dsp,
+            fx_chain=self._fx_chain,
             state_cb=state_cb
         )
         self._decoder.start()
