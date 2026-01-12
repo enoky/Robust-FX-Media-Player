@@ -3866,6 +3866,10 @@ class VideoWidget(QtWidgets.QWidget):
         self.setMinimumSize(200, 120)
         self.setSizePolicy(QtWidgets.QSizePolicy.Policy.Fixed, QtWidgets.QSizePolicy.Policy.Fixed)
 
+    def stop_timer(self) -> None:
+        if self._timer.isActive():
+            self._timer.stop()
+
     def clear(self) -> None:
         self._image = None
         self._timestamp = None
@@ -3906,6 +3910,27 @@ class VideoWidget(QtWidgets.QWidget):
         x = target.x() + (target.width() - scaled.width()) // 2
         y = target.y() + (target.height() - scaled.height()) // 2
         painter.drawImage(QtCore.QPoint(x, y), scaled)
+
+
+class VideoPopoutDialog(QtWidgets.QDialog):
+    closed = QtCore.Signal()
+
+    def __init__(self, engine: PlayerEngine, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Pop-out Video")
+        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        self.video_widget = VideoWidget(engine, self)
+        self.video_widget.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Expanding,
+        )
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.addWidget(self.video_widget)
+
+    def closeEvent(self, event: QtGui.QCloseEvent) -> None:
+        self.video_widget.stop_timer()
+        self.closed.emit()
+        super().closeEvent(event)
 
 
 class TempoPitchWidget(QtWidgets.QGroupBox):
@@ -4983,6 +5008,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.artwork_label.setWordWrap(True)
         self.video_widget = VideoWidget(self.engine)
         self.video_widget.setFixedSize(self._media_size)
+        self.popout_video_btn = QtWidgets.QPushButton("Pop-out Video")
+        self.popout_video_btn.setToolTip("Open video in a separate window.")
+        self.popout_video_btn.setEnabled(False)
+        self.popout_video_btn.setVisible(False)
+        self._video_popout: Optional[VideoPopoutDialog] = None
 
         self.status = QtWidgets.QLabel("Ready.")
         self.status.setObjectName("status_label")
@@ -5008,6 +5038,7 @@ class MainWindow(QtWidgets.QMainWindow):
         header_text_column.addWidget(self.now_playing)
         header_text_column.addWidget(self.status)
         header_text_column.addWidget(self.fx_status)
+        header_text_column.addWidget(self.popout_video_btn)
         header_text_column.addStretch(1)
         header_top_row.addLayout(header_text_column)
         header_layout.addLayout(header_top_row)
@@ -5240,6 +5271,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.theme_combo.currentTextChanged.connect(self._on_theme_changed)
         self.buffer_preset_combo.currentTextChanged.connect(self._on_buffer_preset_changed)
         self.metrics_checkbox.toggled.connect(self._on_metrics_toggled)
+        self.popout_video_btn.clicked.connect(self._toggle_video_window)
 
         self.engine.trackChanged.connect(self._on_track_changed)
         self.engine.stateChanged.connect(self._on_state_changed)
@@ -5688,6 +5720,30 @@ class MainWindow(QtWidgets.QMainWindow):
             self.video_widget.setVisible(False)
             self.artwork_label.setVisible(True)
             self.media_stack.setCurrentWidget(self.artwork_label)
+        self._update_video_popout_state(has_video)
+
+    def _update_video_popout_state(self, has_video: bool) -> None:
+        has_track = self.engine.track is not None
+        show_video = has_track and has_video
+        self.popout_video_btn.setEnabled(show_video)
+        self.popout_video_btn.setVisible(show_video)
+        if not show_video and self._video_popout is not None:
+            self._video_popout.close()
+
+    def _toggle_video_window(self) -> None:
+        if self._video_popout is not None and self._video_popout.isVisible():
+            self._video_popout.raise_()
+            self._video_popout.activateWindow()
+            return
+        if self.engine.track is None or not self.engine.track.has_video:
+            return
+        self._video_popout = VideoPopoutDialog(self.engine, self)
+        self._video_popout.closed.connect(self._on_video_popout_closed)
+        self._video_popout.resize(640, 360)
+        self._video_popout.show()
+
+    def _on_video_popout_closed(self) -> None:
+        self._video_popout = None
 
     def _set_artwork(self, data: Optional[bytes]):
         if data:
