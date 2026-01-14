@@ -1119,22 +1119,52 @@ class PlaylistWidget(QtWidgets.QWidget):
         self.list = QtWidgets.QListWidget()
         self.list.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.SingleSelection)
         self.list.setDragDropMode(QtWidgets.QAbstractItemView.DragDropMode.InternalMove)
-        self.list.setIconSize(QtCore.QSize(42, 42))
+        self.list.setIconSize(QtCore.QSize(32, 32))
         self.list.setUniformItemSizes(True)
+        self.list.setSpacing(2)
 
-        add_files = QtWidgets.QPushButton("Add Files…")
-        add_folder = QtWidgets.QPushButton("Add Folder…")
-        clear_btn = QtWidgets.QPushButton("Clear")
+        style = self.style()
+        add_files = QtWidgets.QToolButton()
+        add_files.setText("Files")
+        add_files.setToolTip("Add files")
+        add_files.setIcon(style.standardIcon(QtWidgets.QStyle.StandardPixmap.SP_FileIcon))
+        add_files.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        add_files.setAutoRaise(True)
 
-        top = QtWidgets.QHBoxLayout()
-        top.addWidget(add_files)
-        top.addWidget(add_folder)
-        top.addStretch(1)
-        top.addWidget(clear_btn)
+        add_folder = QtWidgets.QToolButton()
+        add_folder.setText("Folder")
+        add_folder.setToolTip("Add folder")
+        add_folder.setIcon(style.standardIcon(QtWidgets.QStyle.StandardPixmap.SP_DirOpenIcon))
+        add_folder.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        add_folder.setAutoRaise(True)
+
+        reset_enum = getattr(
+            QtWidgets.QStyle.StandardPixmap,
+            "SP_DialogResetButton",
+            QtWidgets.QStyle.StandardPixmap.SP_DialogCloseButton,
+        )
+        clear_icon_enum = getattr(QtWidgets.QStyle.StandardPixmap, "SP_TrashIcon", reset_enum)
+        clear_btn = QtWidgets.QToolButton()
+        clear_btn.setText("Clear")
+        clear_btn.setToolTip("Clear playlist")
+        clear_btn.setIcon(style.standardIcon(clear_icon_enum))
+        clear_btn.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        clear_btn.setAutoRaise(True)
+
+        for btn in (add_files, add_folder, clear_btn):
+            btn.setIconSize(QtCore.QSize(14, 14))
+
+        header_row = QtWidgets.QHBoxLayout()
+        header_row.addWidget(header)
+        header_row.addStretch(1)
+        header_row.addWidget(add_files)
+        header_row.addWidget(add_folder)
+        header_row.addWidget(clear_btn)
 
         layout = QtWidgets.QVBoxLayout(self)
-        layout.addWidget(header)
-        layout.addLayout(top)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(6)
+        layout.addLayout(header_row)
         layout.addWidget(self.list, 1)
 
         add_files.clicked.connect(self.addFilesRequested)
