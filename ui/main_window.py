@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import sys
-from typing import Optional
+from typing import Callable, Optional
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
@@ -645,19 +645,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.settings.setValue("stereo/width", float(width))
 
     def _on_effect_toggled(self, effect_name: str, enabled: bool) -> None:
-        self.engine.enable_effect(effect_name, enabled)
-        self.settings.setValue(self._effect_setting_key(effect_name), bool(enabled))
-        self._update_enabled_fx_label()
+        self._set_effect_toggle(effect_name, enabled, update_checkbox=False)
 
     def _on_effect_auto_enabled(self, effect_name: str) -> None:
-        checkbox = self.effect_toggles.get(effect_name)
-        if checkbox is None:
-            return
-        checkbox.blockSignals(True)
-        checkbox.setChecked(True)
-        checkbox.blockSignals(False)
-        self.settings.setValue(self._effect_setting_key(effect_name), True)
-        self._update_enabled_fx_label()
+        self._set_effect_toggle(effect_name, True, update_checkbox=True)
 
     def _set_shuffle(self, on: bool):
         self._shuffle = bool(on)
@@ -891,9 +882,13 @@ class MainWindow(QtWidgets.QMainWindow):
         super().closeEvent(e)
 
     def _restore_ui_settings(self):
-        volume_value = self.settings.value("audio/volume_slider", self.transport.volume_slider.value(), type=int)
-        self.transport.volume_slider.setValue(int(volume_value))
-        self.transport.mute_btn.setChecked(self.settings.value("audio/muted", False, type=bool))
+        self._set_slider_from_setting(
+            "audio/volume_slider",
+            self.transport.volume_slider,
+            self.transport.volume_slider.value(),
+            value_type=int,
+        )
+        self._set_checkbox_from_setting("audio/muted", self.transport.mute_btn, False)
 
         buffer_preset = str(self.settings.value("audio/buffer_preset", DEFAULT_BUFFER_PRESET))
         if buffer_preset not in BUFFER_PRESETS:
@@ -908,20 +903,23 @@ class MainWindow(QtWidgets.QMainWindow):
         self.metrics_checkbox.blockSignals(False)
         self.engine.set_metrics_enabled(bool(metrics_enabled))
 
-        tempo = self.settings.value("dsp/tempo", 1.0, type=float)
-        pitch = self.settings.value("dsp/pitch", 0.0, type=float)
-        key_lock = self.settings.value("dsp/key_lock", True, type=bool)
-        tape_mode = self.settings.value("dsp/tape_mode", False, type=bool)
-        lock_432 = self.settings.value("dsp/lock_432", False, type=bool)
-
-        tempo_value = int(round(clamp(float(tempo), 0.5, 2.0) * 100))
-        pitch_value = int(round(clamp(float(pitch), -12.0, 12.0) * 10))
-
-        self.dsp_widget.tempo_slider.setValue(tempo_value)
-        self.dsp_widget.pitch_slider.setValue(pitch_value)
-        self.dsp_widget.key_lock.setChecked(bool(key_lock))
-        self.dsp_widget.lock_432.setChecked(bool(lock_432))
-        self.dsp_widget.tape_mode.setChecked(bool(tape_mode))
+        self._set_slider_from_setting(
+            "dsp/tempo",
+            self.dsp_widget.tempo_slider,
+            1.0,
+            scale=100.0,
+            clamp_range=(0.5, 2.0),
+        )
+        self._set_slider_from_setting(
+            "dsp/pitch",
+            self.dsp_widget.pitch_slider,
+            0.0,
+            scale=10.0,
+            clamp_range=(-12.0, 12.0),
+        )
+        self._set_checkbox_from_setting("dsp/key_lock", self.dsp_widget.key_lock, True)
+        self._set_checkbox_from_setting("dsp/lock_432", self.dsp_widget.lock_432, False)
+        self._set_checkbox_from_setting("dsp/tape_mode", self.dsp_widget.tape_mode, False)
 
         eq_preset = str(self.settings.value("eq/preset", "Flat"))
         eq_gains_raw = self.settings.value("eq/gains", [0.0] * len(self.equalizer.band_sliders))
@@ -931,131 +929,202 @@ class MainWindow(QtWidgets.QMainWindow):
         else:
             self.equalizer.set_gains(eq_gains, preset="Custom", emit=False)
 
-        dynamic_eq_freq = self.settings.value("dynamic_eq/freq", 1000.0, type=float)
-        dynamic_eq_q = self.settings.value("dynamic_eq/q", 1.0, type=float)
-        dynamic_eq_gain = self.settings.value("dynamic_eq/gain", 0.0, type=float)
-        dynamic_eq_threshold = self.settings.value("dynamic_eq/threshold", -24.0, type=float)
-        dynamic_eq_ratio = self.settings.value("dynamic_eq/ratio", 4.0, type=float)
-
-        self.dynamic_eq_widget.freq_slider.setValue(
-            self.dynamic_eq_widget._freq_to_slider(
-                clamp(dynamic_eq_freq, 20.0, 20000.0)
-            )
+        self._set_slider_from_setting(
+            "dynamic_eq/freq",
+            self.dynamic_eq_widget.freq_slider,
+            1000.0,
+            clamp_range=(20.0, 20000.0),
+            transform=self.dynamic_eq_widget._freq_to_slider,
         )
-        self.dynamic_eq_widget.q_slider.setValue(
-            int(round(clamp(dynamic_eq_q, 0.1, 20.0) * 10))
+        self._set_slider_from_setting(
+            "dynamic_eq/q",
+            self.dynamic_eq_widget.q_slider,
+            1.0,
+            scale=10.0,
+            clamp_range=(0.1, 20.0),
         )
-        self.dynamic_eq_widget.gain_slider.setValue(
-            int(round(clamp(dynamic_eq_gain, -12.0, 12.0) * 10))
+        self._set_slider_from_setting(
+            "dynamic_eq/gain",
+            self.dynamic_eq_widget.gain_slider,
+            0.0,
+            scale=10.0,
+            clamp_range=(-12.0, 12.0),
         )
-        self.dynamic_eq_widget.threshold_slider.setValue(
-            int(round(clamp(dynamic_eq_threshold, -60.0, 0.0) * 10))
+        self._set_slider_from_setting(
+            "dynamic_eq/threshold",
+            self.dynamic_eq_widget.threshold_slider,
+            -24.0,
+            scale=10.0,
+            clamp_range=(-60.0, 0.0),
         )
-        self.dynamic_eq_widget.ratio_slider.setValue(
-            int(round(clamp(dynamic_eq_ratio, 1.0, 20.0) * 10))
-        )
-
-        compressor_threshold = self.settings.value("compressor/threshold", -18.0, type=float)
-        compressor_ratio = self.settings.value("compressor/ratio", 4.0, type=float)
-        compressor_attack = self.settings.value("compressor/attack", 10.0, type=float)
-        compressor_release = self.settings.value("compressor/release", 120.0, type=float)
-        compressor_makeup = self.settings.value("compressor/makeup", 0.0, type=float)
-
-        self.compressor_widget.threshold_slider.setValue(
-            int(round(clamp(compressor_threshold, -60.0, 0.0) * 10))
-        )
-        self.compressor_widget.ratio_slider.setValue(
-            int(round(clamp(compressor_ratio, 1.0, 20.0) * 10))
-        )
-        self.compressor_widget.attack_slider.setValue(
-            int(round(clamp(compressor_attack, 0.1, 200.0) * 10))
-        )
-        self.compressor_widget.release_slider.setValue(
-            int(round(clamp(compressor_release, 1.0, 1000.0)))
-        )
-        self.compressor_widget.makeup_slider.setValue(
-            int(round(clamp(compressor_makeup, 0.0, 24.0) * 10))
+        self._set_slider_from_setting(
+            "dynamic_eq/ratio",
+            self.dynamic_eq_widget.ratio_slider,
+            4.0,
+            scale=10.0,
+            clamp_range=(1.0, 20.0),
         )
 
-        saturation_drive = self.settings.value("saturation/drive", 6.0, type=float)
-        saturation_trim = self.settings.value("saturation/trim", 0.0, type=float)
-        saturation_tone = self.settings.value("saturation/tone", 0.0, type=float)
-        saturation_tone_enabled = self.settings.value("saturation/tone_enabled", False, type=bool)
-
-        self.saturation_widget.drive_slider.setValue(
-            int(round(clamp(saturation_drive, 0.0, 24.0) * 10))
+        self._set_slider_from_setting(
+            "compressor/threshold",
+            self.compressor_widget.threshold_slider,
+            -18.0,
+            scale=10.0,
+            clamp_range=(-60.0, 0.0),
         )
-        self.saturation_widget.trim_slider.setValue(
-            int(round(clamp(saturation_trim, -24.0, 24.0) * 10))
+        self._set_slider_from_setting(
+            "compressor/ratio",
+            self.compressor_widget.ratio_slider,
+            4.0,
+            scale=10.0,
+            clamp_range=(1.0, 20.0),
         )
-        self.saturation_widget.tone_slider.setValue(
-            int(round(clamp(saturation_tone, -1.0, 1.0) * 100))
+        self._set_slider_from_setting(
+            "compressor/attack",
+            self.compressor_widget.attack_slider,
+            10.0,
+            scale=10.0,
+            clamp_range=(0.1, 200.0),
         )
-        self.saturation_widget.tone_toggle.setChecked(bool(saturation_tone_enabled))
-
-        subharmonic_mix = self.settings.value("subharmonic/mix", 0.25, type=float)
-        subharmonic_intensity = self.settings.value("subharmonic/intensity", 0.6, type=float)
-        subharmonic_cutoff = self.settings.value("subharmonic/cutoff", 140.0, type=float)
-
-        self.subharmonic_widget.mix_slider.setValue(
-            int(round(clamp(subharmonic_mix, 0.0, 1.0) * 100))
+        self._set_slider_from_setting(
+            "compressor/release",
+            self.compressor_widget.release_slider,
+            120.0,
+            clamp_range=(1.0, 1000.0),
         )
-        self.subharmonic_widget.intensity_slider.setValue(
-            int(round(clamp(subharmonic_intensity, 0.0, 1.5) * 100))
-        )
-        self.subharmonic_widget.cutoff_slider.setValue(
-            int(round(clamp(subharmonic_cutoff, 60.0, 240.0)))
-        )
-
-        limiter_threshold = self.settings.value("limiter/threshold", -1.0, type=float)
-        limiter_release = self.settings.value("limiter/release", 80.0, type=float)
-        limiter_release_enabled = self.settings.value("limiter/release_enabled", True, type=bool)
-
-        self.limiter_widget.threshold_slider.setValue(
-            int(round(clamp(limiter_threshold, -60.0, 0.0) * 10))
-        )
-        self.limiter_widget.release_slider.setValue(
-            int(round(clamp(limiter_release, 1.0, 1000.0)))
-        )
-        self.limiter_widget.release_toggle.setChecked(bool(limiter_release_enabled))
-
-        reverb_decay = self.settings.value("reverb/decay", 1.4, type=float)
-        reverb_predelay = self.settings.value("reverb/predelay", 20.0, type=float)
-        reverb_mix = self.settings.value("reverb/mix", 0.25, type=float)
-
-        self.reverb_widget.decay_slider.setValue(int(round(clamp(reverb_decay, 0.2, 6.0) * 100)))
-        self.reverb_widget.predelay_slider.setValue(int(round(clamp(reverb_predelay, 0.0, 120.0))))
-        self.reverb_widget.mix_slider.setValue(int(round(clamp(reverb_mix, 0.0, 1.0) * 100)))
-
-        chorus_rate = self.settings.value("chorus/rate", 0.8, type=float)
-        chorus_depth = self.settings.value("chorus/depth", 8.0, type=float)
-        chorus_mix = self.settings.value("chorus/mix", 0.25, type=float)
-
-        self.chorus_widget.rate_slider.setValue(int(round(clamp(chorus_rate, 0.05, 5.0) * 100)))
-        self.chorus_widget.depth_slider.setValue(int(round(clamp(chorus_depth, 0.0, 20.0) * 10)))
-        self.chorus_widget.mix_slider.setValue(int(round(clamp(chorus_mix, 0.0, 1.0) * 100)))
-
-        panner_azimuth = self.settings.value("panner/azimuth", 0.0, type=float)
-        panner_spread = self.settings.value("panner/spread", 1.0, type=float)
-
-        self.stereo_panner_widget.azimuth_slider.setValue(
-            int(round(clamp(panner_azimuth, -90.0, 90.0)))
-        )
-        self.stereo_panner_widget.spread_slider.setValue(
-            int(round(clamp(panner_spread, 0.0, 1.0) * 100))
+        self._set_slider_from_setting(
+            "compressor/makeup",
+            self.compressor_widget.makeup_slider,
+            0.0,
+            scale=10.0,
+            clamp_range=(0.0, 24.0),
         )
 
-        stereo_width = self.settings.value("stereo/width", 1.0, type=float)
-        self.stereo_width_widget.width_slider.setValue(int(round(clamp(stereo_width, 0.0, 2.0) * 100)))
+        self._set_slider_from_setting(
+            "saturation/drive",
+            self.saturation_widget.drive_slider,
+            6.0,
+            scale=10.0,
+            clamp_range=(0.0, 24.0),
+        )
+        self._set_slider_from_setting(
+            "saturation/trim",
+            self.saturation_widget.trim_slider,
+            0.0,
+            scale=10.0,
+            clamp_range=(-24.0, 24.0),
+        )
+        self._set_slider_from_setting(
+            "saturation/tone",
+            self.saturation_widget.tone_slider,
+            0.0,
+            scale=100.0,
+            clamp_range=(-1.0, 1.0),
+        )
+        self._set_checkbox_from_setting("saturation/tone_enabled", self.saturation_widget.tone_toggle, False)
 
-        enabled_effects = set(self.engine.get_enabled_effects())
-        for name, checkbox in self.effect_toggles.items():
-            enabled = self.settings.value(self._effect_setting_key(name), name in enabled_effects, type=bool)
-            checkbox.blockSignals(True)
-            checkbox.setChecked(bool(enabled))
-            checkbox.blockSignals(False)
-            self.engine.enable_effect(name, bool(enabled))
-        self._update_enabled_fx_label()
+        self._set_slider_from_setting(
+            "subharmonic/mix",
+            self.subharmonic_widget.mix_slider,
+            0.25,
+            scale=100.0,
+            clamp_range=(0.0, 1.0),
+        )
+        self._set_slider_from_setting(
+            "subharmonic/intensity",
+            self.subharmonic_widget.intensity_slider,
+            0.6,
+            scale=100.0,
+            clamp_range=(0.0, 1.5),
+        )
+        self._set_slider_from_setting(
+            "subharmonic/cutoff",
+            self.subharmonic_widget.cutoff_slider,
+            140.0,
+            clamp_range=(60.0, 240.0),
+        )
+
+        self._set_slider_from_setting(
+            "limiter/threshold",
+            self.limiter_widget.threshold_slider,
+            -1.0,
+            scale=10.0,
+            clamp_range=(-60.0, 0.0),
+        )
+        self._set_slider_from_setting(
+            "limiter/release",
+            self.limiter_widget.release_slider,
+            80.0,
+            clamp_range=(1.0, 1000.0),
+        )
+        self._set_checkbox_from_setting("limiter/release_enabled", self.limiter_widget.release_toggle, True)
+
+        self._set_slider_from_setting(
+            "reverb/decay",
+            self.reverb_widget.decay_slider,
+            1.4,
+            scale=100.0,
+            clamp_range=(0.2, 6.0),
+        )
+        self._set_slider_from_setting(
+            "reverb/predelay",
+            self.reverb_widget.predelay_slider,
+            20.0,
+            clamp_range=(0.0, 120.0),
+        )
+        self._set_slider_from_setting(
+            "reverb/mix",
+            self.reverb_widget.mix_slider,
+            0.25,
+            scale=100.0,
+            clamp_range=(0.0, 1.0),
+        )
+
+        self._set_slider_from_setting(
+            "chorus/rate",
+            self.chorus_widget.rate_slider,
+            0.8,
+            scale=100.0,
+            clamp_range=(0.05, 5.0),
+        )
+        self._set_slider_from_setting(
+            "chorus/depth",
+            self.chorus_widget.depth_slider,
+            8.0,
+            scale=10.0,
+            clamp_range=(0.0, 20.0),
+        )
+        self._set_slider_from_setting(
+            "chorus/mix",
+            self.chorus_widget.mix_slider,
+            0.25,
+            scale=100.0,
+            clamp_range=(0.0, 1.0),
+        )
+
+        self._set_slider_from_setting(
+            "panner/azimuth",
+            self.stereo_panner_widget.azimuth_slider,
+            0.0,
+            clamp_range=(-90.0, 90.0),
+        )
+        self._set_slider_from_setting(
+            "panner/spread",
+            self.stereo_panner_widget.spread_slider,
+            1.0,
+            scale=100.0,
+            clamp_range=(0.0, 1.0),
+        )
+
+        self._set_slider_from_setting(
+            "stereo/width",
+            self.stereo_width_widget.width_slider,
+            1.0,
+            scale=100.0,
+            clamp_range=(0.0, 2.0),
+        )
+
+        self._apply_effect_toggle_settings()
 
     def _apply_ui_settings(self):
         self.engine.set_volume(self.transport.volume_slider.value() / 100.0)
@@ -1120,54 +1189,49 @@ class MainWindow(QtWidgets.QMainWindow):
         self.engine.set_stereo_width(self.stereo_width_widget.width_slider.value() / 100.0)
 
     def _save_ui_settings(self):
-        self.settings.setValue("audio/volume_slider", self.transport.volume_slider.value())
-        self.settings.setValue("audio/muted", self.transport.mute_btn.isChecked())
-        self.settings.setValue("audio/metrics_enabled", self.metrics_checkbox.isChecked())
-        self.settings.setValue("dsp/tempo", self.dsp_widget.tempo_slider.value() / 100.0)
-        self.settings.setValue("dsp/pitch", self.dsp_widget.pitch_slider.value() / 10.0)
-        self.settings.setValue("dsp/key_lock", self.dsp_widget.key_lock.isChecked())
-        self.settings.setValue("dsp/tape_mode", self.dsp_widget.tape_mode.isChecked())
-        self.settings.setValue("dsp/lock_432", self.dsp_widget.lock_432.isChecked())
+        self._save_slider_setting("audio/volume_slider", self.transport.volume_slider)
+        self._save_checkbox_setting("audio/muted", self.transport.mute_btn)
+        self._save_checkbox_setting("audio/metrics_enabled", self.metrics_checkbox)
+        self._save_slider_setting("dsp/tempo", self.dsp_widget.tempo_slider, scale=100.0)
+        self._save_slider_setting("dsp/pitch", self.dsp_widget.pitch_slider, scale=10.0)
+        self._save_checkbox_setting("dsp/key_lock", self.dsp_widget.key_lock)
+        self._save_checkbox_setting("dsp/tape_mode", self.dsp_widget.tape_mode)
+        self._save_checkbox_setting("dsp/lock_432", self.dsp_widget.lock_432)
         self.settings.setValue("eq/gains", self.equalizer.gains())
         self.settings.setValue("eq/preset", self.equalizer.presets.currentText())
         self.settings.setValue(
             "dynamic_eq/freq",
             self.dynamic_eq_widget._slider_to_freq(self.dynamic_eq_widget.freq_slider.value()),
         )
-        self.settings.setValue("dynamic_eq/q", self.dynamic_eq_widget.q_slider.value() / 10.0)
-        self.settings.setValue("dynamic_eq/gain", self.dynamic_eq_widget.gain_slider.value() / 10.0)
-        self.settings.setValue(
-            "dynamic_eq/threshold", self.dynamic_eq_widget.threshold_slider.value() / 10.0
-        )
-        self.settings.setValue("dynamic_eq/ratio", self.dynamic_eq_widget.ratio_slider.value() / 10.0)
-        self.settings.setValue("compressor/threshold", self.compressor_widget.threshold_slider.value() / 10.0)
-        self.settings.setValue("compressor/ratio", self.compressor_widget.ratio_slider.value() / 10.0)
-        self.settings.setValue("compressor/attack", self.compressor_widget.attack_slider.value() / 10.0)
-        self.settings.setValue("compressor/release", float(self.compressor_widget.release_slider.value()))
-        self.settings.setValue("compressor/makeup", self.compressor_widget.makeup_slider.value() / 10.0)
-        self.settings.setValue("saturation/drive", self.saturation_widget.drive_slider.value() / 10.0)
-        self.settings.setValue("saturation/trim", self.saturation_widget.trim_slider.value() / 10.0)
-        self.settings.setValue("saturation/tone", self.saturation_widget.tone_slider.value() / 100.0)
-        self.settings.setValue("saturation/tone_enabled", self.saturation_widget.tone_toggle.isChecked())
-        self.settings.setValue("subharmonic/mix", self.subharmonic_widget.mix_slider.value() / 100.0)
-        self.settings.setValue(
-            "subharmonic/intensity", self.subharmonic_widget.intensity_slider.value() / 100.0
-        )
-        self.settings.setValue("subharmonic/cutoff", float(self.subharmonic_widget.cutoff_slider.value()))
-        self.settings.setValue("limiter/threshold", self.limiter_widget.threshold_slider.value() / 10.0)
-        self.settings.setValue("limiter/release", float(self.limiter_widget.release_slider.value()))
-        self.settings.setValue("limiter/release_enabled", self.limiter_widget.release_toggle.isChecked())
-        self.settings.setValue("reverb/decay", self.reverb_widget.decay_slider.value() / 100.0)
-        self.settings.setValue("reverb/predelay", float(self.reverb_widget.predelay_slider.value()))
-        self.settings.setValue("reverb/mix", self.reverb_widget.mix_slider.value() / 100.0)
-        self.settings.setValue("chorus/rate", self.chorus_widget.rate_slider.value() / 100.0)
-        self.settings.setValue("chorus/depth", self.chorus_widget.depth_slider.value() / 10.0)
-        self.settings.setValue("chorus/mix", self.chorus_widget.mix_slider.value() / 100.0)
-        self.settings.setValue("panner/azimuth", float(self.stereo_panner_widget.azimuth_slider.value()))
-        self.settings.setValue("panner/spread", self.stereo_panner_widget.spread_slider.value() / 100.0)
-        self.settings.setValue("stereo/width", self.stereo_width_widget.width_slider.value() / 100.0)
-        for name, checkbox in self.effect_toggles.items():
-            self.settings.setValue(self._effect_setting_key(name), checkbox.isChecked())
+        self._save_slider_setting("dynamic_eq/q", self.dynamic_eq_widget.q_slider, scale=10.0)
+        self._save_slider_setting("dynamic_eq/gain", self.dynamic_eq_widget.gain_slider, scale=10.0)
+        self._save_slider_setting("dynamic_eq/threshold", self.dynamic_eq_widget.threshold_slider, scale=10.0)
+        self._save_slider_setting("dynamic_eq/ratio", self.dynamic_eq_widget.ratio_slider, scale=10.0)
+        self._save_slider_setting("compressor/threshold", self.compressor_widget.threshold_slider, scale=10.0)
+        self._save_slider_setting("compressor/ratio", self.compressor_widget.ratio_slider, scale=10.0)
+        self._save_slider_setting("compressor/attack", self.compressor_widget.attack_slider, scale=10.0)
+        self._save_slider_setting("compressor/release", self.compressor_widget.release_slider)
+        self._save_slider_setting("compressor/makeup", self.compressor_widget.makeup_slider, scale=10.0)
+        self._save_slider_setting("saturation/drive", self.saturation_widget.drive_slider, scale=10.0)
+        self._save_slider_setting("saturation/trim", self.saturation_widget.trim_slider, scale=10.0)
+        self._save_slider_setting("saturation/tone", self.saturation_widget.tone_slider, scale=100.0)
+        self._save_checkbox_setting("saturation/tone_enabled", self.saturation_widget.tone_toggle)
+        self._save_slider_setting("subharmonic/mix", self.subharmonic_widget.mix_slider, scale=100.0)
+        self._save_slider_setting("subharmonic/intensity", self.subharmonic_widget.intensity_slider, scale=100.0)
+        self._save_slider_setting("subharmonic/cutoff", self.subharmonic_widget.cutoff_slider)
+        self._save_slider_setting("limiter/threshold", self.limiter_widget.threshold_slider, scale=10.0)
+        self._save_slider_setting("limiter/release", self.limiter_widget.release_slider)
+        self._save_checkbox_setting("limiter/release_enabled", self.limiter_widget.release_toggle)
+        self._save_slider_setting("reverb/decay", self.reverb_widget.decay_slider, scale=100.0)
+        self._save_slider_setting("reverb/predelay", self.reverb_widget.predelay_slider)
+        self._save_slider_setting("reverb/mix", self.reverb_widget.mix_slider, scale=100.0)
+        self._save_slider_setting("chorus/rate", self.chorus_widget.rate_slider, scale=100.0)
+        self._save_slider_setting("chorus/depth", self.chorus_widget.depth_slider, scale=10.0)
+        self._save_slider_setting("chorus/mix", self.chorus_widget.mix_slider, scale=100.0)
+        self._save_slider_setting("panner/azimuth", self.stereo_panner_widget.azimuth_slider)
+        self._save_slider_setting("panner/spread", self.stereo_panner_widget.spread_slider, scale=100.0)
+        self._save_slider_setting("stereo/width", self.stereo_width_widget.width_slider, scale=100.0)
+        self._save_effect_toggle_settings()
 
     @staticmethod
     def _normalize_eq_gains(values: object, band_count: int) -> list[float]:
@@ -1182,6 +1246,61 @@ class MainWindow(QtWidgets.QMainWindow):
     @staticmethod
     def _effect_setting_key(name: str) -> str:
         return f"effects/enabled/{name}"
+
+    def _set_checkbox_from_setting(
+        self,
+        key: str,
+        checkbox: QtWidgets.QAbstractButton,
+        default: bool = False,
+    ) -> None:
+        checkbox.setChecked(self.settings.value(key, default, type=bool))
+
+    def _save_checkbox_setting(self, key: str, checkbox: QtWidgets.QAbstractButton) -> None:
+        self.settings.setValue(key, checkbox.isChecked())
+
+    def _set_slider_from_setting(
+        self,
+        key: str,
+        slider: QtWidgets.QSlider,
+        default: float,
+        *,
+        scale: float = 1.0,
+        clamp_range: Optional[tuple[float, float]] = None,
+        transform: Optional[Callable[[float], float]] = None,
+        value_type: type = float,
+    ) -> None:
+        value = self.settings.value(key, default, type=value_type)
+        value = float(value)
+        if clamp_range is not None:
+            value = clamp(value, clamp_range[0], clamp_range[1])
+        if transform is not None:
+            value = transform(value)
+        slider.setValue(int(round(value * scale)))
+
+    def _save_slider_setting(self, key: str, slider: QtWidgets.QSlider, *, scale: float = 1.0) -> None:
+        self.settings.setValue(key, slider.value() / scale)
+
+    def _set_effect_toggle(self, effect_name: str, enabled: bool, *, update_checkbox: bool) -> None:
+        checkbox = self.effect_toggles.get(effect_name)
+        if checkbox is None:
+            return
+        if update_checkbox:
+            checkbox.blockSignals(True)
+            checkbox.setChecked(bool(enabled))
+            checkbox.blockSignals(False)
+        self.engine.enable_effect(effect_name, bool(enabled))
+        self._save_checkbox_setting(self._effect_setting_key(effect_name), checkbox)
+        self._update_enabled_fx_label()
+
+    def _apply_effect_toggle_settings(self) -> None:
+        enabled_effects = set(self.engine.get_enabled_effects())
+        for name in self.effect_toggles:
+            enabled = self.settings.value(self._effect_setting_key(name), name in enabled_effects, type=bool)
+            self._set_effect_toggle(name, enabled, update_checkbox=True)
+
+    def _save_effect_toggle_settings(self) -> None:
+        for name, checkbox in self.effect_toggles.items():
+            self._save_checkbox_setting(self._effect_setting_key(name), checkbox)
 
     def _restore_playlist_session(self):
         saved_paths = self.settings.value("playlist/paths", [], type=list)
