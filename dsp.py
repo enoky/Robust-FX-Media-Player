@@ -896,6 +896,86 @@ class SubharmonicEffect(EffectProcessor):
         return out
 
 
+if njit is not None:
+    @njit(cache=True, nogil=True)
+    def _reverb_process_block(
+        x: np.ndarray,
+        predelay_buffer: np.ndarray,
+        predelay_index: int,
+        comb_buffers: np.ndarray,
+        comb_indices: np.ndarray,
+        comb_feedback: np.ndarray,
+        comb_lengths: np.ndarray,
+        allpass_buffers: np.ndarray,
+        allpass_indices: np.ndarray,
+        allpass_lengths: np.ndarray,
+        allpass_gain: float,
+        wet: float,
+        dry: float,
+    ) -> tuple[np.ndarray, int]:
+        n_frames, n_channels = x.shape
+        out = np.empty_like(x)
+        predelay_len = predelay_buffer.shape[0]
+        comb_count = comb_buffers.shape[0]
+        allpass_count = allpass_buffers.shape[0]
+        inv_comb = 1.0 / comb_count if comb_count > 0 else 0.0
+
+        predelay = np.empty((n_channels,), dtype=np.float32)
+        comb_sum = np.empty((n_channels,), dtype=np.float32)
+        ap = np.empty((n_channels,), dtype=np.float32)
+
+        for i in range(n_frames):
+            for ch in range(n_channels):
+                predelay[ch] = predelay_buffer[predelay_index, ch]
+                predelay_buffer[predelay_index, ch] = x[i, ch]
+            predelay_index += 1
+            if predelay_index >= predelay_len:
+                predelay_index = 0
+
+            for ch in range(n_channels):
+                comb_sum[ch] = 0.0
+
+            for idx in range(comb_count):
+                pos = comb_indices[idx]
+                length = comb_lengths[idx]
+                if pos >= length:
+                    pos = 0
+                fb = comb_feedback[idx]
+                for ch in range(n_channels):
+                    y = comb_buffers[idx, pos, ch]
+                    comb_sum[ch] += y
+                    comb_buffers[idx, pos, ch] = predelay[ch] + (y * fb)
+                pos += 1
+                if pos >= length:
+                    pos = 0
+                comb_indices[idx] = pos
+
+            for ch in range(n_channels):
+                ap[ch] = comb_sum[ch] * inv_comb
+
+            for idx in range(allpass_count):
+                pos = allpass_indices[idx]
+                length = allpass_lengths[idx]
+                if pos >= length:
+                    pos = 0
+                for ch in range(n_channels):
+                    buf_out = allpass_buffers[idx, pos, ch]
+                    y = (-allpass_gain * ap[ch]) + buf_out
+                    allpass_buffers[idx, pos, ch] = ap[ch] + (allpass_gain * y)
+                    ap[ch] = y
+                pos += 1
+                if pos >= length:
+                    pos = 0
+                allpass_indices[idx] = pos
+
+            for ch in range(n_channels):
+                out[i, ch] = (dry * x[i, ch]) + (wet * ap[ch])
+
+        return out, predelay_index
+else:
+    _reverb_process_block = None
+
+
 class ReverbEffect(EffectProcessor):
     name = "Reverb"
 
@@ -914,13 +994,17 @@ class ReverbEffect(EffectProcessor):
         self._comb_delay_ms = [29.7, 37.1, 41.1, 43.7]
         self._allpass_delay_ms = [5.0, 1.7]
         self._allpass_gain = 0.7
-        self._comb_buffers: list[np.ndarray] = []
-        self._comb_indices: list[int] = []
-        self._comb_feedback: list[float] = []
-        self._allpass_buffers: list[np.ndarray] = []
-        self._allpass_indices: list[int] = []
+        self._comb_buffers = np.zeros((0, 1, self.channels), dtype=np.float32)
+        self._comb_indices = np.zeros((0,), dtype=np.int32)
+        self._comb_lengths = np.zeros((0,), dtype=np.int32)
+        self._comb_feedback = np.zeros((0,), dtype=np.float32)
+        self._allpass_buffers = np.zeros((0, 1, self.channels), dtype=np.float32)
+        self._allpass_indices = np.zeros((0,), dtype=np.int32)
+        self._allpass_lengths = np.zeros((0,), dtype=np.int32)
         self._predelay_buffer = np.zeros((1, self.channels), dtype=np.float32)
         self._predelay_index = 0
+        self._predelay_scratch = np.zeros((self.channels,), dtype=np.float32)
+        self._comb_scratch = np.zeros((self.channels,), dtype=np.float32)
         self._decay_time = 1.4
         self._pre_delay_ms = 20.0
         self._wet = 0.25
@@ -928,14 +1012,14 @@ class ReverbEffect(EffectProcessor):
         self.set_parameters(decay_time, pre_delay_ms, wet)
 
     def reset(self) -> None:
-        for buf in self._comb_buffers:
-            buf.fill(0.0)
-        for buf in self._allpass_buffers:
-            buf.fill(0.0)
+        self._comb_buffers.fill(0.0)
+        self._allpass_buffers.fill(0.0)
         self._predelay_buffer.fill(0.0)
         self._predelay_index = 0
-        self._comb_indices = [0 for _ in self._comb_indices]
-        self._allpass_indices = [0 for _ in self._allpass_indices]
+        if self._comb_indices.size:
+            self._comb_indices.fill(0)
+        if self._allpass_indices.size:
+            self._allpass_indices.fill(0)
 
     def set_parameters(self, decay_time: float, pre_delay_ms: float, wet: float) -> None:
         self._decay_time = clamp(float(decay_time), 0.2, 6.0)
@@ -959,23 +1043,39 @@ class ReverbEffect(EffectProcessor):
             max(1, int(round(ms * self.sample_rate / 1000.0))) for ms in self._allpass_delay_ms
         ]
 
-        if not self._comb_buffers or [buf.shape[0] for buf in self._comb_buffers] != comb_samples:
-            self._comb_buffers = [
-                np.zeros((size, self.channels), dtype=np.float32) for size in comb_samples
-            ]
-            self._comb_indices = [0 for _ in self._comb_buffers]
+        comb_lengths = np.array(comb_samples, dtype=np.int32)
+        comb_count = int(comb_lengths.shape[0])
+        comb_max = int(comb_lengths.max()) if comb_count else 1
+        if (
+            self._comb_buffers.shape[0] != comb_count
+            or self._comb_buffers.shape[1] != comb_max
+        ):
+            self._comb_buffers = np.zeros(
+                (comb_count, comb_max, self.channels), dtype=np.float32
+            )
+            self._comb_indices = np.zeros((comb_count,), dtype=np.int32)
+        self._comb_lengths = comb_lengths
 
-        if not self._allpass_buffers or [buf.shape[0] for buf in self._allpass_buffers] != allpass_samples:
-            self._allpass_buffers = [
-                np.zeros((size, self.channels), dtype=np.float32) for size in allpass_samples
-            ]
-            self._allpass_indices = [0 for _ in self._allpass_buffers]
+        allpass_lengths = np.array(allpass_samples, dtype=np.int32)
+        allpass_count = int(allpass_lengths.shape[0])
+        allpass_max = int(allpass_lengths.max()) if allpass_count else 1
+        if (
+            self._allpass_buffers.shape[0] != allpass_count
+            or self._allpass_buffers.shape[1] != allpass_max
+        ):
+            self._allpass_buffers = np.zeros(
+                (allpass_count, allpass_max, self.channels), dtype=np.float32
+            )
+            self._allpass_indices = np.zeros((allpass_count,), dtype=np.int32)
+        self._allpass_lengths = allpass_lengths
 
-        self._comb_feedback = []
-        for size in comb_samples:
+        comb_feedback = np.zeros((comb_count,), dtype=np.float32)
+        for i in range(comb_count):
+            size = comb_lengths[i]
             delay_sec = size / self.sample_rate
             feedback = 10.0 ** (-3.0 * delay_sec / max(0.1, self._decay_time))
-            self._comb_feedback.append(clamp(feedback, 0.0, 0.99))
+            comb_feedback[i] = clamp(feedback, 0.0, 0.99)
+        self._comb_feedback = comb_feedback
 
     def process(self, x: np.ndarray) -> np.ndarray:
         if not self.enabled or x.size == 0:
@@ -985,35 +1085,92 @@ class ReverbEffect(EffectProcessor):
         if x.dtype != np.float32:
             x = x.astype(np.float32, copy=False)
 
+        if _reverb_process_block is not None:
+            out, predelay_index = _reverb_process_block(
+                x,
+                self._predelay_buffer,
+                self._predelay_index,
+                self._comb_buffers,
+                self._comb_indices,
+                self._comb_feedback,
+                self._comb_lengths,
+                self._allpass_buffers,
+                self._allpass_indices,
+                self._allpass_lengths,
+                self._allpass_gain,
+                self._wet,
+                self._dry,
+            )
+            self._predelay_index = predelay_index
+            return out
+
         out = np.empty_like(x)
         n = x.shape[0]
 
+        predelay_buffer = self._predelay_buffer
+        predelay_index = self._predelay_index
+        predelay_len = predelay_buffer.shape[0]
+        predelay_scratch = self._predelay_scratch
+
+        comb_buffers = self._comb_buffers
+        comb_indices = self._comb_indices
+        comb_feedback = self._comb_feedback
+        comb_lengths = self._comb_lengths
+        comb_count = comb_buffers.shape[0]
+        comb_sum = self._comb_scratch
+        inv_comb_count = 1.0 / comb_count if comb_count else 0.0
+
+        allpass_buffers = self._allpass_buffers
+        allpass_indices = self._allpass_indices
+        allpass_lengths = self._allpass_lengths
+        allpass_gain = self._allpass_gain
+
+        dry = self._dry
+        wet = self._wet
+
         for i in range(n):
             inp = x[i]
-            pred = self._predelay_buffer[self._predelay_index]
-            self._predelay_buffer[self._predelay_index] = inp
-            self._predelay_index = (self._predelay_index + 1) % self._predelay_buffer.shape[0]
 
-            comb_sum = np.zeros(self.channels, dtype=np.float32)
-            for idx, (buf, feedback) in enumerate(zip(self._comb_buffers, self._comb_feedback)):
-                pos = self._comb_indices[idx]
-                y = buf[pos]
-                buf[pos] = pred + y * feedback
-                self._comb_indices[idx] = (pos + 1) % buf.shape[0]
+            predelay_scratch[:] = predelay_buffer[predelay_index]
+            predelay_buffer[predelay_index] = inp
+            predelay_index += 1
+            if predelay_index >= predelay_len:
+                predelay_index = 0
+
+            comb_sum.fill(0.0)
+            for idx in range(comb_count):
+                pos = int(comb_indices[idx])
+                length = int(comb_lengths[idx])
+                if pos >= length:
+                    pos = 0
+                y = comb_buffers[idx, pos]
                 comb_sum += y
+                comb_buffers[idx, pos] = predelay_scratch + (y * comb_feedback[idx])
+                pos += 1
+                if pos >= length:
+                    pos = 0
+                comb_indices[idx] = pos
 
-            comb_out = comb_sum / max(1, len(self._comb_buffers))
-            ap = comb_out
-            for idx, buf in enumerate(self._allpass_buffers):
-                pos = self._allpass_indices[idx]
-                buf_out = buf[pos]
-                y = (-self._allpass_gain * ap) + buf_out
-                buf[pos] = ap + (self._allpass_gain * y)
+            ap = comb_sum
+            if comb_count:
+                ap *= inv_comb_count
+            for idx in range(allpass_buffers.shape[0]):
+                pos = int(allpass_indices[idx])
+                length = int(allpass_lengths[idx])
+                if pos >= length:
+                    pos = 0
+                buf_out = allpass_buffers[idx, pos]
+                y = (-allpass_gain * ap) + buf_out
+                allpass_buffers[idx, pos] = ap + (allpass_gain * y)
                 ap = y
-                self._allpass_indices[idx] = (pos + 1) % buf.shape[0]
+                pos += 1
+                if pos >= length:
+                    pos = 0
+                allpass_indices[idx] = pos
 
-            out[i] = (self._dry * inp) + (self._wet * ap)
+            out[i] = (dry * inp) + (wet * ap)
 
+        self._predelay_index = predelay_index
         return out
 
 
