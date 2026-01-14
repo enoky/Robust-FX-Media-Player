@@ -414,10 +414,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if not have_exe("ffprobe"):
             warnings.append("ffprobe not found in PATH (duration may be unknown)")
         dsp_name = self.engine.dsp_name()
-        if "SoundTouch" in dsp_name:
-            warnings.append(f"DSP: {dsp_name}")
-        else:
-            warnings.append(f"DSP: {dsp_name}")
+        warnings.append(f"DSP: {dsp_name}")
 
         self.status.setText(("⚠ " + " | ".join(warnings)) if warnings else "Ready.")
 

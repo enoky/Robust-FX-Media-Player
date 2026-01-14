@@ -219,6 +219,44 @@ class DecoderThread(threading.Thread):
         else:
             self._viz_buffer.push(frames)
 
+    def _process_audio_block(
+        self,
+        x: np.ndarray,
+        *,
+        eq_profile_enabled: bool,
+        profile_iter: int,
+        low_watermark_frames: int,
+        profile_label: str,
+    ) -> tuple[np.ndarray, int]:
+        y = self.dsp.process(x)
+        if y.size:
+            eq_start = time.perf_counter()
+            y = self.eq_dsp.process(y)
+            eq_elapsed = time.perf_counter() - eq_start
+            if eq_profile_enabled and eq_elapsed > 0:
+                n_frames = y.shape[0]
+                process_ms = eq_elapsed * 1000.0
+                expected_ms = (n_frames / self.sample_rate) * 1000.0
+                frames_per_second_processed = n_frames / eq_elapsed
+                if process_ms > 0.5 * expected_ms:
+                    logger.warning(
+                        "EQ too slow: %.2fms for %d frames", process_ms, n_frames
+                    )
+                if (profile_iter % EQ_PROFILE_LOG_EVERY == 0
+                        or self.ring.frames_available() < low_watermark_frames):
+                    logger.debug(
+                        "%s: %.2fms, %.1f fps, ring=%d",
+                        profile_label,
+                        process_ms,
+                        frames_per_second_processed,
+                        self.ring.frames_available(),
+                    )
+                profile_iter += 1
+            y = self.fx_chain.process(y)
+            y = self._maybe_apply_fade_in(y)
+            self._push_visualizer(y)
+        return y, profile_iter
+
     def _read_pcm_chunk(self, stdout) -> Optional[np.ndarray]:
         if self._stop.is_set():
             return None
@@ -275,32 +313,13 @@ class DecoderThread(threading.Thread):
                 x = self._read_pcm_chunk(stdout)
                 if x is None:
                     break
-                y = self.dsp.process(x)
-                if y.size:
-                    eq_start = time.perf_counter()
-                    y = self.eq_dsp.process(y)
-                    eq_elapsed = time.perf_counter() - eq_start
-                    if eq_profile_enabled and eq_elapsed > 0:
-                        n_frames = y.shape[0]
-                        process_ms = eq_elapsed * 1000.0
-                        expected_ms = (n_frames / self.sample_rate) * 1000.0
-                        frames_per_second_processed = n_frames / eq_elapsed
-                        if process_ms > 0.5 * expected_ms:
-                            logger.warning(
-                                "EQ too slow: %.2fms for %d frames", process_ms, n_frames
-                            )
-                        if (profile_iter % EQ_PROFILE_LOG_EVERY == 0
-                                or self.ring.frames_available() < low_watermark_frames):
-                            logger.debug(
-                                "EQ warmup: %.2fms, %.1f fps, ring=%d",
-                                process_ms,
-                                frames_per_second_processed,
-                                self.ring.frames_available(),
-                            )
-                        profile_iter += 1
-                    y = self.fx_chain.process(y)
-                    y = self._maybe_apply_fade_in(y)
-                    self._push_visualizer(y)
+                y, profile_iter = self._process_audio_block(
+                    x,
+                    eq_profile_enabled=eq_profile_enabled,
+                    profile_iter=profile_iter,
+                    low_watermark_frames=low_watermark_frames,
+                    profile_label="EQ warmup",
+                )
                 if y.size:
                     self.ring.push_blocking(y, stop_event=self._stop)
                 if self.ring.frames_available() >= int(PREBUFFER_SEC * self.sample_rate):
@@ -320,32 +339,13 @@ class DecoderThread(threading.Thread):
                 x = self._read_pcm_chunk(stdout)
                 if x is None:
                     break
-                y = self.dsp.process(x)
-                if y.size:
-                    eq_start = time.perf_counter()
-                    y = self.eq_dsp.process(y)
-                    eq_elapsed = time.perf_counter() - eq_start
-                    if eq_profile_enabled and eq_elapsed > 0:
-                        n_frames = y.shape[0]
-                        process_ms = eq_elapsed * 1000.0
-                        expected_ms = (n_frames / self.sample_rate) * 1000.0
-                        frames_per_second_processed = n_frames / eq_elapsed
-                        if process_ms > 0.5 * expected_ms:
-                            logger.warning(
-                                "EQ too slow: %.2fms for %d frames", process_ms, n_frames
-                            )
-                        if (profile_iter % EQ_PROFILE_LOG_EVERY == 0
-                                or self.ring.frames_available() < low_watermark_frames):
-                            logger.debug(
-                                "EQ main: %.2fms, %.1f fps, ring=%d",
-                                process_ms,
-                                frames_per_second_processed,
-                                self.ring.frames_available(),
-                            )
-                        profile_iter += 1
-                    y = self.fx_chain.process(y)
-                    y = self._maybe_apply_fade_in(y)
-                    self._push_visualizer(y)
+                y, profile_iter = self._process_audio_block(
+                    x,
+                    eq_profile_enabled=eq_profile_enabled,
+                    profile_iter=profile_iter,
+                    low_watermark_frames=low_watermark_frames,
+                    profile_label="EQ main",
+                )
                 if y.size:
                     self.ring.push_blocking(y, stop_event=self._stop)
 

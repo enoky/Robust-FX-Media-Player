@@ -118,6 +118,28 @@ class EqualizerDSP:
         )
         self._config = self._build_config(self._gains_db, reset_mask=np.zeros((0,), dtype=bool))
 
+    @staticmethod
+    def _peaking_coeffs(f0: float, gain_db: float, q: float, sample_rate: int) -> tuple[float, float, float, float, float]:
+        A = 10.0 ** (gain_db / 40.0)
+        w0 = 2.0 * math.pi * f0 / float(sample_rate)
+        cos_w0 = math.cos(w0)
+        sin_w0 = math.sin(w0)
+        alpha = sin_w0 / (2.0 * q)
+
+        b0 = 1.0 + alpha * A
+        b1 = -2.0 * cos_w0
+        b2 = 1.0 - alpha * A
+        a0 = 1.0 + alpha / A
+        a1 = -2.0 * cos_w0
+        a2 = 1.0 - alpha / A
+
+        b0 /= a0
+        b1 /= a0
+        b2 /= a0
+        a1 /= a0
+        a2 /= a0
+        return b0, b1, b2, a1, a2
+
     def reset(self) -> None:
         self._pending_reset = True
         self._reset_all = True
@@ -156,24 +178,7 @@ class EqualizerDSP:
     def _build_config(self, gains_db: list[float], reset_mask: np.ndarray) -> EqConfig:
         sos_rows = []
         for f0, gain_db in zip(self.center_freqs, gains_db):
-            A = 10.0 ** (gain_db / 40.0)
-            w0 = 2.0 * math.pi * f0 / float(self.sr)
-            cos_w0 = math.cos(w0)
-            sin_w0 = math.sin(w0)
-            alpha = sin_w0 / (2.0 * self.q)
-
-            b0 = 1.0 + alpha * A
-            b1 = -2.0 * cos_w0
-            b2 = 1.0 - alpha * A
-            a0 = 1.0 + alpha / A
-            a1 = -2.0 * cos_w0
-            a2 = 1.0 - alpha / A
-
-            b0 /= a0
-            b1 /= a0
-            b2 /= a0
-            a1 /= a0
-            a2 /= a0
+            b0, b1, b2, a1, a2 = self._peaking_coeffs(f0, gain_db, self.q, self.sr)
 
             if abs(gain_db) > 1e-3:
                 sos_rows.append((b0, b1, b2, 1.0, a1, a2))
@@ -187,24 +192,7 @@ class EqualizerDSP:
         sos_rows = []
         active_indices = []
         for i, (f0, gain_db) in enumerate(zip(self.center_freqs, new_gains)):
-            A = 10.0 ** (gain_db / 40.0)
-            w0 = 2.0 * math.pi * f0 / float(self.sr)
-            cos_w0 = math.cos(w0)
-            sin_w0 = math.sin(w0)
-            alpha = sin_w0 / (2.0 * self.q)
-
-            b0 = 1.0 + alpha * A
-            b1 = -2.0 * cos_w0
-            b2 = 1.0 - alpha * A
-            a0 = 1.0 + alpha / A
-            a1 = -2.0 * cos_w0
-            a2 = 1.0 - alpha / A
-
-            b0 /= a0
-            b1 /= a0
-            b2 /= a0
-            a1 /= a0
-            a2 /= a0
+            b0, b1, b2, a1, a2 = self._peaking_coeffs(f0, gain_db, self.q, self.sr)
 
             if abs(gain_db) > 1e-3:
                 active_indices.append(i)
