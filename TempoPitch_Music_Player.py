@@ -36,7 +36,6 @@ import json
 import logging
 import re
 from dataclasses import dataclass, replace
-from enum import Enum, auto
 from collections import deque
 from typing import Optional, List, Callable
 
@@ -60,274 +59,43 @@ except Exception as e:
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
+from config import (
+    AUTO_BUFFER_PRESET,
+    AUTO_BUFFER_THRESHOLD,
+    AUTO_BUFFER_WINDOW_SEC,
+    BLOCKSIZE_FRAMES,
+    BUFFER_PRESETS,
+    DEFAULT_BUFFER_PRESET,
+    EQ_PROFILE,
+    EQ_PROFILE_LOG_EVERY,
+    EQ_PROFILE_LOW_WATERMARK_SEC,
+    LATENCY,
+)
+from models import (
+    AudioParams,
+    BufferPreset,
+    PlayerState,
+    RepeatMode,
+    Theme,
+    THEMES,
+    Track,
+    TrackMetadata,
+    format_track_title,
+)
+from utils import (
+    adjust_color,
+    clamp,
+    env_flag,
+    format_time,
+    have_exe,
+    safe_float,
+    semitones_to_factor,
+)
+
 logger = logging.getLogger(__name__)
-EQ_PROFILE = False
-EQ_PROFILE_LOG_EVERY = 50
-EQ_PROFILE_LOW_WATERMARK_SEC = 0.25
-BLOCKSIZE_FRAMES = 512
-LATENCY = "low"
-DEFAULT_BUFFER_PRESET = "Stable"
-AUTO_BUFFER_PRESET = "Ultra Stable"
-AUTO_BUFFER_WINDOW_SEC = 6.0
-AUTO_BUFFER_THRESHOLD = 3
 
 
-@dataclass(frozen=True)
-class BufferPreset:
-    blocksize_frames: int
-    latency: str | float
-    target_sec: float
-    high_sec: float
-    low_sec: float
-    ring_max_seconds: float
 
-
-BUFFER_PRESETS = {
-    "Stable": BufferPreset(
-        blocksize_frames=BLOCKSIZE_FRAMES,
-        latency=LATENCY,
-        target_sec=0.7,
-        high_sec=0.9,
-        low_sec=0.5,
-        ring_max_seconds=1.25,
-    ),
-    "Low Latency": BufferPreset(
-        blocksize_frames=256,
-        latency=LATENCY,
-        target_sec=0.5,
-        high_sec=0.7,
-        low_sec=0.35,
-        ring_max_seconds=0.9,
-    ),
-    "Ultra Stable": BufferPreset(
-        blocksize_frames=2048,
-        latency="high",
-        target_sec=1.5,
-        high_sec=2.0,
-        low_sec=1.1,
-        ring_max_seconds=2.5,
-    ),
-}
-
-
-# -----------------------------
-# Utilities
-# -----------------------------
-
-def have_exe(name: str) -> bool:
-    return shutil.which(name) is not None
-
-def clamp(x: float, lo: float, hi: float) -> float:
-    return lo if x < lo else hi if x > hi else x
-
-def semitones_to_factor(semitones: float) -> float:
-    return float(2.0 ** (semitones / 12.0))
-
-def format_time(seconds: float) -> str:
-    if not math.isfinite(seconds) or seconds < 0:
-        seconds = 0.0
-    total = int(seconds + 0.5)
-    m, s = divmod(total, 60)
-    h, m = divmod(m, 60)
-    if h > 0:
-        return f"{h:d}:{m:02d}:{s:02d}"
-    return f"{m:d}:{s:02d}"
-
-def safe_float(x: str, default: float = 0.0) -> float:
-    try:
-        return float(x)
-    except Exception:
-        return default
-
-
-def env_flag(name: str) -> bool:
-    value = os.environ.get(name, "").strip().lower()
-    return value in {"1", "true", "yes", "on"}
-
-
-def adjust_color(color: str, *, lighter: Optional[int] = None, darker: Optional[int] = None) -> str:
-    qt_color = QtGui.QColor(color)
-    if lighter is not None:
-        qt_color = qt_color.lighter(lighter)
-    if darker is not None:
-        qt_color = qt_color.darker(darker)
-    return qt_color.name()
-
-def adjust_color(color: str, *, lighter: Optional[int] = None, darker: Optional[int] = None) -> str:
-    qt_color = QtGui.QColor(color)
-    if lighter is not None:
-        qt_color = qt_color.lighter(lighter)
-    if darker is not None:
-        qt_color = qt_color.darker(darker)
-    return qt_color.name()
-
-
-# -----------------------------
-# Models
-# -----------------------------
-
-@dataclass
-class Track:
-    path: str
-    title: str
-    duration_sec: float
-    artist: str = ""
-    album: str = ""
-    title_display: str = ""
-    cover_art: Optional[bytes] = None
-    has_video: bool = False
-    video_fps: float = 0.0
-    video_size: tuple[int, int] = (0, 0)
-
-
-@dataclass(frozen=True)
-class AudioParams:
-    tempo: float
-    pitch_st: float
-    key_lock: bool
-    tape_mode: bool
-    eq_gains: tuple[float, ...]
-    compressor_threshold: float
-    compressor_ratio: float
-    compressor_attack: float
-    compressor_release: float
-    compressor_makeup: float
-    dynamic_eq_freq: float
-    dynamic_eq_q: float
-    dynamic_eq_gain: float
-    dynamic_eq_threshold: float
-    dynamic_eq_ratio: float
-    saturation_drive: float
-    saturation_trim: float
-    saturation_tone: float
-    saturation_tone_enabled: bool
-    subharmonic_mix: float
-    subharmonic_intensity: float
-    subharmonic_cutoff: float
-    reverb_decay: float
-    reverb_predelay: float
-    reverb_wet: float
-    chorus_rate: float
-    chorus_depth: float
-    chorus_mix: float
-    stereo_width: float
-    panner_azimuth: float
-    panner_spread: float
-    limiter_threshold: float
-    limiter_release_ms: Optional[float]
-    compressor_enabled: bool
-    dynamic_eq_enabled: bool
-    subharmonic_enabled: bool
-    reverb_enabled: bool
-    chorus_enabled: bool
-    saturation_enabled: bool
-    limiter_enabled: bool
-    version: int
-
-
-@dataclass
-class TrackMetadata:
-    duration_sec: float
-    artist: str
-    album: str
-    title: str
-    cover_art: Optional[bytes]
-    has_video: bool
-    video_fps: float
-    video_size: tuple[int, int]
-
-
-def format_track_title(track: Track) -> str:
-    title = track.title_display or track.title or os.path.basename(track.path)
-    artist = track.artist.strip()
-    if artist:
-        return f"{artist} — {title}"
-    return title
-
-
-class PlayerState(Enum):
-    STOPPED = auto()
-    LOADING = auto()
-    PLAYING = auto()
-    PAUSED = auto()
-    ERROR = auto()
-
-
-class RepeatMode(Enum):
-    OFF = "off"
-    ALL = "all"
-    ONE = "one"
-
-    @classmethod
-    def from_setting(cls, value: str) -> "RepeatMode":
-        for mode in cls:
-            if mode.value == value:
-                return mode
-        return cls.OFF
-
-
-# -----------------------------
-# Theme
-# -----------------------------
-
-@dataclass(frozen=True)
-class Theme:
-    name: str
-    window: str
-    base: str
-    text: str
-    highlight: str
-    accent: str
-    card: str
-
-
-THEMES = {
-    "Ocean": Theme(
-        name="Ocean",
-        window="#0f172a",
-        base="#0b1220",
-        text="#e2e8f0",
-        highlight="#38bdf8",
-        accent="#22d3ee",
-        card="#111c30",
-    ),
-    "Sunset": Theme(
-        name="Sunset",
-        window="#2b1d20",
-        base="#201417",
-        text="#fde8e8",
-        highlight="#fb7185",
-        accent="#f97316",
-        card="#372125",
-    ),
-    "Forest": Theme(
-        name="Forest",
-        window="#0f1f17",
-        base="#0b1510",
-        text="#e7f6ef",
-        highlight="#34d399",
-        accent="#10b981",
-        card="#14271d",
-    ),
-    "Rose": Theme(
-        name="Rose",
-        window="#2a1621",
-        base="#1f1018",
-        text="#fde7f2",
-        highlight="#f472b6",
-        accent="#fb7185",
-        card="#331a28",
-    ),
-    "Slate": Theme(
-        name="Slate",
-        window="#1f2937",
-        base="#111827",
-        text="#f8fafc",
-        highlight="#60a5fa",
-        accent="#94a3b8",
-        card="#263243",
-    ),
-}
 
 
 def build_palette(theme: Theme) -> QtGui.QPalette:
