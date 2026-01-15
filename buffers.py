@@ -163,28 +163,35 @@ class VisualizerBuffer:
         mono: bool = False,
         delay_frames: int = 0,
     ) -> np.ndarray:
+        delay = max(0, int(delay_frames))
         with self._lock:
-            if self._filled == 0:
+            filled = self._filled
+            if filled == 0 or delay >= filled:
                 data = np.zeros((0, self.channels), dtype=np.float32)
-            elif self._filled < self.max_frames:
-                data = self._buffer[: self._filled, :]
             else:
-                if self._write_index == 0:
-                    data = self._buffer
+                available = filled - delay
+                if frames is not None and frames > 0:
+                    take = min(frames, available)
                 else:
-                    data = np.vstack((self._buffer[self._write_index :, :], self._buffer[: self._write_index, :]))
+                    take = available
 
-            delay = max(0, int(delay_frames))
-            if delay and data.size:
-                if delay >= data.shape[0]:
-                    data = data[:0, :]
+                if take <= 0:
+                    data = np.zeros((0, self.channels), dtype=np.float32)
+                elif filled < self.max_frames:
+                    end = filled - delay
+                    start = end - take
+                    data = np.empty((take, self.channels), dtype=np.float32)
+                    data[:, :] = self._buffer[start:end, :]
                 else:
-                    data = data[:-delay, :]
-
-            if frames is not None and frames > 0:
-                data = data[-frames:, :]
-
-            data = np.array(data, copy=True)
+                    end = (self._write_index - delay) % self.max_frames
+                    start = (end - take) % self.max_frames
+                    data = np.empty((take, self.channels), dtype=np.float32)
+                    if start < end:
+                        data[:, :] = self._buffer[start:end, :]
+                    else:
+                        first = self.max_frames - start
+                        data[:first, :] = self._buffer[start:, :]
+                        data[first:, :] = self._buffer[:end, :]
 
         if mono and data.size:
             mono_data = data.mean(axis=1, dtype=np.float32)

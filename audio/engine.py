@@ -731,6 +731,7 @@ class PlayerEngine(QtCore.QObject):
         self._metrics_last_log = time.monotonic()
         self._viz_callback_stride = 1
         self._viz_downsample = 1
+        self._viz_callback_counter = 0
         self._fade_out_ramp = np.linspace(1.0, 0.0, 32, dtype=np.float32)
         self._stability_events: deque[tuple[float, int, int]] = deque()
         self._auto_buffer_last_switch = 0.0
@@ -1101,7 +1102,7 @@ class PlayerEngine(QtCore.QObject):
             channels=self.channels,
             ring=self._ring,
             buffer_preset=self._buffer_preset,
-            viz_buffer=self._viz_buffer,
+            viz_buffer=None,
             viz_stride=self._viz_callback_stride,
             viz_downsample=self._viz_downsample,
             dsp=self._dsp,
@@ -1204,6 +1205,13 @@ class PlayerEngine(QtCore.QObject):
                 fade_samples = min(filled, self._fade_out_ramp.shape[0])
                 if fade_samples > 1:
                     outdata[filled - fade_samples:filled] *= self._fade_out_ramp[:fade_samples, None]
+            if self._viz_buffer is not None:
+                self._viz_callback_counter = (self._viz_callback_counter + 1) % self._viz_callback_stride
+                if self._viz_callback_counter == 0:
+                    viz_frames = outdata[:filled]
+                    if self._viz_downsample > 1:
+                        viz_frames = viz_frames[::self._viz_downsample]
+                    self._viz_buffer.push(viz_frames)
             if status and getattr(status, "output_underflow", False):
                 self._callback_underflows += 1
             if status and getattr(status, "output_overflow", False):
