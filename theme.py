@@ -29,6 +29,9 @@ def build_stylesheet(theme: Theme) -> str:
     button = adjust_color(theme.card, lighter=112)
     button_hover = adjust_color(button, lighter=108)
     accent = theme.accent
+    slider_track = adjust_color(theme.text, darker=220)
+    slider_border = adjust_color(slider_track, darker=130)
+    slider_handle_border = adjust_color(accent, darker=150)
     return f"""
         QMainWindow {{
             background: {theme.window};
@@ -52,10 +55,20 @@ def build_stylesheet(theme: Theme) -> str:
             margin: -4px 0;
             border-radius: 7px;
             background: {accent};
+            border: 1px solid {slider_handle_border};
         }}
         QSlider::groove:horizontal {{
             height: 6px;
-            background: {adjust_color(theme.base, lighter=110)};
+            background: {slider_track};
+            border: 1px solid {slider_border};
+            border-radius: 3px;
+        }}
+        QSlider::sub-page:horizontal {{
+            background: {accent};
+            border-radius: 3px;
+        }}
+        QSlider::add-page:horizontal {{
+            background: {slider_track};
             border-radius: 3px;
         }}
         QGroupBox {{
