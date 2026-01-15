@@ -78,6 +78,17 @@ def build_stylesheet(theme: Theme) -> str:
             border: 1px solid {border};
             background: {theme.base};
         }}
+        QListWidget::item {{
+            margin: 0px;
+            padding: 0px;
+            border: none;
+        }}
+        QListWidget::item:selected {{
+            border: none;
+        }}
+        QListWidget::item:hover {{
+            border: none;
+        }}
         QLabel#track_title {{
             font-size: 18px;
             font-weight: 700;

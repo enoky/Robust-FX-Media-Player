@@ -1126,9 +1126,11 @@ class PlaylistWidget(QtWidgets.QWidget):
         self.list = QtWidgets.QListWidget()
         self.list.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.SingleSelection)
         self.list.setDragDropMode(QtWidgets.QAbstractItemView.DragDropMode.InternalMove)
-        self.list.setIconSize(QtCore.QSize(32, 32))
+        row_height = self.list.fontMetrics().height() + 4
+        self._row_height = row_height
+        self.list.setIconSize(QtCore.QSize(row_height, row_height))
         self.list.setUniformItemSizes(True)
-        self.list.setSpacing(2)
+        self.list.setSpacing(0)
 
         style = self.style()
         add_files = QtWidgets.QToolButton()
@@ -1193,6 +1195,7 @@ class PlaylistWidget(QtWidgets.QWidget):
             item_text = self._format_item_text(t)
             it = QtWidgets.QListWidgetItem(item_text)
             it.setData(QtCore.Qt.ItemDataRole.UserRole, t)
+            it.setSizeHint(QtCore.QSize(0, self._row_height))
 
             # Small album-art thumbnail in the playlist (if embedded artwork exists)
             self._apply_cover_art(it, t, icon_size)
@@ -1293,6 +1296,7 @@ class PlaylistWidget(QtWidgets.QWidget):
                 continue
             self._apply_metadata(track, metadata)
             item.setText(self._format_item_text(track))
+            item.setSizeHint(QtCore.QSize(0, self._row_height))
             self._apply_cover_art(item, track, icon_size)
 
 
