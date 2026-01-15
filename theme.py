@@ -78,9 +78,23 @@ def build_stylesheet(theme: Theme) -> str:
             border: 1px solid {border};
             background: {theme.base};
         }}
-        QLabel#now_playing {{
-            font-size: 16px;
+        QLabel#track_title {{
+            font-size: 18px;
             font-weight: 700;
+            color: {theme.text};
+        }}
+        QLabel#track_artist {{
+            font-size: 14px;
+            font-weight: 600;
+            color: {adjust_color(theme.text, lighter=112)};
+        }}
+        QLabel#track_album {{
+            font-size: 13px;
+            color: {adjust_color(theme.text, lighter=108)};
+        }}
+        QLabel#track_meta {{
+            font-size: 12px;
+            color: {adjust_color(theme.text, lighter=120)};
         }}
         QLabel#status_label {{
             color: {adjust_color(theme.text, lighter=120)};
@@ -90,6 +104,11 @@ def build_stylesheet(theme: Theme) -> str:
             border-radius: 14px;
             background: {theme.card};
             padding: 12px;
+        }}
+        QFrame#media_frame {{
+            border: 1px solid {border};
+            border-radius: 16px;
+            background: {adjust_color(theme.base, lighter=106)};
         }}
         QLabel#playlist_header {{
             font-size: 14px;

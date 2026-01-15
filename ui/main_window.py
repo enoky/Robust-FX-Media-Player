@@ -144,15 +144,30 @@ class MainWindow(QtWidgets.QMainWindow):
         self._folder_scan_thread: Optional[QtCore.QThread] = None
         self._folder_scan_worker: Optional[FolderScanWorker] = None
 
-        self.now_playing = QtWidgets.QLabel("No track loaded")
-        self.now_playing.setObjectName("now_playing")
-        self.now_playing.setWordWrap(True)
-        font = self.now_playing.font()
-        font.setPointSize(font.pointSize() + 2)
-        font.setBold(True)
-        self.now_playing.setFont(font)
+        self.track_title = QtWidgets.QLabel("No track loaded")
+        self.track_title.setObjectName("track_title")
+        self.track_title.setWordWrap(True)
+        title_font = self.track_title.font()
+        title_font.setPointSize(title_font.pointSize() + 4)
+        title_font.setBold(True)
+        self.track_title.setFont(title_font)
 
-        self._media_size = QtCore.QSize(200, 120)
+        self.track_artist = QtWidgets.QLabel("Unknown Artist")
+        self.track_artist.setObjectName("track_artist")
+        self.track_artist.setWordWrap(True)
+        artist_font = self.track_artist.font()
+        artist_font.setPointSize(artist_font.pointSize() + 1)
+        self.track_artist.setFont(artist_font)
+
+        self.track_album = QtWidgets.QLabel("Unknown Album")
+        self.track_album.setObjectName("track_album")
+        self.track_album.setWordWrap(True)
+
+        self.track_meta = QtWidgets.QLabel("")
+        self.track_meta.setObjectName("track_meta")
+        self.track_meta.setWordWrap(True)
+
+        self._media_size = QtCore.QSize(150, 150)
         self.artwork_label = QtWidgets.QLabel("No Artwork")
         self.artwork_label.setObjectName("artwork_label")
         self.artwork_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
@@ -183,14 +198,25 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         header_layout = QtWidgets.QVBoxLayout(self.header_frame)
         header_top_row = QtWidgets.QHBoxLayout()
-        self.media_stack_widget = QtWidgets.QWidget()
+        self.media_stack_widget = QtWidgets.QFrame()
+        self.media_stack_widget.setObjectName("media_frame")
+        self.media_stack_widget.setFixedSize(self._media_size)
+        self.media_stack_widget.setSizePolicy(
+            QtWidgets.QSizePolicy.Fixed,
+            QtWidgets.QSizePolicy.Fixed,
+        )
         self.media_stack = QtWidgets.QStackedLayout(self.media_stack_widget)
+        self.media_stack.setContentsMargins(0, 0, 0, 0)
         self.media_stack.addWidget(self.artwork_label)
         self.media_stack.addWidget(self.video_widget)
         self.media_stack.setCurrentWidget(self.artwork_label)
         header_top_row.addWidget(self.media_stack_widget)
         header_text_column = QtWidgets.QVBoxLayout()
-        header_text_column.addWidget(self.now_playing)
+        header_text_column.addWidget(self.track_title)
+        header_text_column.addWidget(self.track_artist)
+        header_text_column.addWidget(self.track_album)
+        header_text_column.addSpacing(6)
+        header_text_column.addWidget(self.track_meta)
         header_text_column.addWidget(self.popout_video_btn)
         header_text_column.addStretch(1)
         header_top_row.addLayout(header_text_column)
@@ -759,7 +785,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self._current_index = -1
         self._shuffle_history.clear()
         self._shuffle_bag = []
-        self.now_playing.setText("No track loaded")
+        self.track_title.setText("No track loaded")
+        self.track_artist.setText("Unknown Artist")
+        self.track_album.setText("Unknown Album")
+        self.track_meta.setText("")
         self._set_media_mode(False)
         self.video_widget.clear()
         self._set_artwork(None)
@@ -1016,7 +1045,15 @@ class MainWindow(QtWidgets.QMainWindow):
         artist = track.artist.strip() or "Unknown Artist"
         title = track.title_display.strip() or track.title or os.path.basename(track.path)
         album = track.album.strip() or "Unknown Album"
-        self.now_playing.setText(f"{artist} — {title}\n{album}")
+        self.track_title.setText(title)
+        self.track_artist.setText(artist)
+        self.track_album.setText(album)
+        duration_label = format_time(track.duration_sec) if track.duration_sec > 0 else "--:--"
+        ext = os.path.splitext(track.path)[1].lstrip(".").upper()
+        meta_parts = [duration_label]
+        if ext:
+            meta_parts.append(ext)
+        self.track_meta.setText(" • ".join(meta_parts))
         self._set_media_mode(track.has_video)
         self._set_artwork(track.cover_art)
         self._dur = track.duration_sec
