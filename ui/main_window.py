@@ -558,6 +558,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if theme_name not in THEMES:
             return
         self._apply_theme(theme_name)
+        self.playlist.refresh_playing_highlight()
         self.settings.setValue("ui/theme", theme_name)
 
     def _about(self):
@@ -1054,6 +1055,14 @@ class MainWindow(QtWidgets.QMainWindow):
         if ext:
             meta_parts.append(ext)
         self.track_meta.setText(" • ".join(meta_parts))
+        idx = self.playlist.index_for_path(track.path)
+        if idx < 0:
+            idx = self.playlist.current_index()
+        if idx < 0:
+            idx = self._current_index
+        if idx >= 0:
+            self._current_index = idx
+        self.playlist.set_playing_index(idx)
         self._set_media_mode(track.has_video)
         self._set_artwork(track.cover_art)
         self._dur = track.duration_sec
@@ -1615,5 +1624,3 @@ class MainWindow(QtWidgets.QMainWindow):
             self._add_paths(saved_paths, select_first_if_empty=False, on_done=restore_position)
         else:
             restore_position()
-
-

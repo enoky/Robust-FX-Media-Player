@@ -15,6 +15,28 @@ from utils import clamp, format_time, safe_float
 # UI Widgets
 # -----------------------------
 
+PLAYING_ROLE = QtCore.Qt.ItemDataRole.UserRole + 1
+
+
+class PlaylistItemDelegate(QtWidgets.QStyledItemDelegate):
+    def __init__(self, list_widget: QtWidgets.QListWidget):
+        super().__init__(list_widget)
+        self._list = list_widget
+
+    def paint(
+        self,
+        painter: QtGui.QPainter,
+        option: QtWidgets.QStyleOptionViewItem,
+        index: QtCore.QModelIndex,
+    ) -> None:
+        if index.data(PLAYING_ROLE):
+            color = QtGui.QColor(self._list.palette().color(QtGui.QPalette.ColorRole.Highlight))
+            color.setAlpha(140)
+            painter.save()
+            painter.fillRect(option.rect, color)
+            painter.restore()
+        super().paint(painter, option, index)
+
 class VisualizerWidget(QtWidgets.QWidget):
     def __init__(self, engine: PlayerEngine, parent=None):
         super().__init__(parent)
@@ -1131,6 +1153,7 @@ class PlaylistWidget(QtWidgets.QWidget):
         self.list.setIconSize(QtCore.QSize(row_height, row_height))
         self.list.setUniformItemSizes(True)
         self.list.setSpacing(0)
+        self.list.setItemDelegate(PlaylistItemDelegate(self.list))
 
         style = self.style()
         add_files = QtWidgets.QToolButton()
@@ -1185,6 +1208,7 @@ class PlaylistWidget(QtWidgets.QWidget):
         self.setAcceptDrops(True)
         self._dropped_paths: List[str] = []
         self._items_by_path: dict[str, list[QtWidgets.QListWidgetItem]] = {}
+        self._playing_item: Optional[QtWidgets.QListWidgetItem] = None
 
     def _on_double(self, item: QtWidgets.QListWidgetItem):
         self.trackActivated.emit(self.list.row(item))
@@ -1206,6 +1230,7 @@ class PlaylistWidget(QtWidgets.QWidget):
     def clear(self):
         self.list.clear()
         self._items_by_path.clear()
+        self._playing_item = None
 
     def count(self) -> int:
         return self.list.count()
@@ -1213,6 +1238,12 @@ class PlaylistWidget(QtWidgets.QWidget):
     def get_track(self, idx: int) -> Optional[Track]:
         it = self.list.item(idx)
         return it.data(QtCore.Qt.ItemDataRole.UserRole) if it else None
+
+    def index_for_path(self, path: str) -> int:
+        items = self._items_by_path.get(path)
+        if not items:
+            return -1
+        return self.list.row(items[0])
 
     def track_paths(self) -> List[str]:
         paths: List[str] = []
@@ -1231,6 +1262,27 @@ class PlaylistWidget(QtWidgets.QWidget):
     def select_index(self, idx: int):
         if 0 <= idx < self.list.count():
             self.list.setCurrentRow(idx)
+
+    def set_playing_index(self, idx: int) -> None:
+        self._clear_playing_style(self._playing_item)
+        item = self.list.item(idx) if 0 <= idx < self.list.count() else None
+        self._playing_item = item
+        self._apply_playing_style(item)
+        self.list.viewport().update()
+
+    def refresh_playing_highlight(self) -> None:
+        self._apply_playing_style(self._playing_item)
+        self.list.viewport().update()
+
+    def _apply_playing_style(self, item: Optional[QtWidgets.QListWidgetItem]) -> None:
+        if not item:
+            return
+        item.setData(PLAYING_ROLE, True)
+
+    def _clear_playing_style(self, item: Optional[QtWidgets.QListWidgetItem]) -> None:
+        if not item:
+            return
+        item.setData(PLAYING_ROLE, False)
 
     def dragEnterEvent(self, e: QtGui.QDragEnterEvent):
         if e.mimeData().hasUrls():
