@@ -490,8 +490,7 @@ class EqualizerWidget(QtWidgets.QGroupBox):
         layout.addLayout(header)
         layout.addLayout(sliders_layout)
 
-        self.setMaximumWidth(360)
-        self.setSizePolicy(QtWidgets.QSizePolicy.Policy.Fixed, QtWidgets.QSizePolicy.Policy.Preferred)
+        self.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Preferred)
 
         self.reset_btn.clicked.connect(self._on_reset)
         self.presets.currentTextChanged.connect(self._on_preset_changed)
