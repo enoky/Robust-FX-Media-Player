@@ -619,6 +619,7 @@ class PlayerEngine(QtCore.QObject):
         self._buffer_preset = BUFFER_PRESETS[self._buffer_preset_name]
         self._blocksize_frames = self._buffer_preset.blocksize_frames
         self._latency = self._buffer_preset.latency
+        self._auto_enable_effects = False
 
         self.state = PlayerState.STOPPED
         self.track: Optional[Track] = None
@@ -855,6 +856,8 @@ class PlayerEngine(QtCore.QObject):
         return self._EFFECT_PARAM_KEYS.get(name)
 
     def _maybe_auto_enable_effect(self, name: str, *, should_enable: bool) -> dict[str, bool]:
+        if not self._auto_enable_effects:
+            return {}
         if not should_enable:
             return {}
         key = self._effect_param_key(name)
