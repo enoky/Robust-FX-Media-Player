@@ -321,6 +321,17 @@ class LibraryWidget(QtWidgets.QWidget):
              self._update_icons()
 
     def _load_tracks(self, tracks: List[LibraryTrack]):
+        # consistently sort tracks by Artist -> Album -> Track Number -> Title
+        # regardless of how they were retrieved (All, Artist, Search)
+        def sort_key(t: LibraryTrack):
+             # Handle None values for sorting safely
+             artist = (t.artist or "").lower()
+             album = (t.album or "").lower()
+             track_num = t.track_number or 0
+             title = (t.title or "").lower()
+             return (artist, album, track_num, title)
+
+        tracks.sort(key=sort_key)
         self._model = LibraryTableModel(tracks, self)
         self.table.setModel(self._model)
         self.table.resizeColumnsToContents()
