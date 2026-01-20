@@ -329,8 +329,8 @@ class LibraryWidget(QtWidgets.QWidget):
         self.table.setColumnWidth(0, 35) # Icon
         self.table.setColumnWidth(1, 40) # Track Number
         self.table.setColumnWidth(2, 240) # Title
-        self.table.setColumnWidth(3, 180) # Artist
-        self.table.setColumnWidth(4, 180) # Album
+        self.table.setColumnWidth(3, 200) # Artist
+        self.table.setColumnWidth(4, 200) # Album
         
         self.track_count_label.setText(f"{len(tracks)} tracks")
 

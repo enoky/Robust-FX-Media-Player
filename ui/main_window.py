@@ -115,7 +115,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("PySide6 Tempo/Pitch Music Player (SoundTouch)")
-        self.resize(1280, 640)
+        self.resize(1440, 900)
 
         self.settings = QtCore.QSettings("ChatGPT", "TempoPitchPlayer")
         self._theme_name = str(self.settings.value("ui/theme", "Ocean"))
