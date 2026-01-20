@@ -319,7 +319,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         player_layout.addLayout(top_row)
 
-        player_layout.addStretch(1)
+
         self.main_tabs.addTab(player_tab, "Player")
 
         fx_tab = QtWidgets.QWidget()
@@ -342,7 +342,7 @@ class MainWindow(QtWidgets.QMainWindow):
         left = QtWidgets.QVBoxLayout()
         left.setContentsMargins(12, 12, 12, 12)
         left.setSpacing(8)
-        left.addWidget(self.main_tabs, 1)
+        left.addWidget(self.main_tabs, 0)
 
         leftw = QtWidgets.QWidget()
         leftw.setLayout(left)
