@@ -73,6 +73,8 @@ class LibraryScanWorker(QtCore.QObject):
                     "title": m.title,
                     "artist": m.artist,
                     "album": m.album,
+                    "genre": m.genre,
+                    "year": m.year,
                     "duration_sec": m.duration_sec,
                     "cover_art": m.cover_art,
                 }

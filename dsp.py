@@ -1909,6 +1909,8 @@ def probe_metadata(path: str) -> TrackMetadata:
     artist = ""
     album = ""
     title = ""
+    genre = ""
+    year: Optional[int] = None
     isrc = ""
     cover_art = None
     has_video = False
@@ -1927,7 +1929,7 @@ def probe_metadata(path: str) -> TrackMetadata:
                     "json",
                     "-show_entries",
                     (
-                        "format=duration:format_tags=artist,album,album_artist,title,isrc:"
+                        "format=duration:format_tags=artist,album,album_artist,title,genre,date,isrc:"
                         "stream=index,codec_type,width,height:stream_disposition=attached_pic:"
                         "stream_tags=comment,title,mimetype"
                     ),
@@ -1945,6 +1947,17 @@ def probe_metadata(path: str) -> TrackMetadata:
                 artist = tags_lower.get("artist") or tags_lower.get("album_artist") or ""
                 album = tags_lower.get("album") or ""
                 title = tags_lower.get("title") or ""
+                genre = tags_lower.get("genre") or ""
+                date_str = tags_lower.get("date") or ""
+                year = None
+                if date_str:
+                    try:
+                        # Extract just the year from ISO strings like 2023-05-20 or just 2023
+                        year_str = date_str.split("-")[0].strip()
+                        if year_str.isdigit():
+                            year = int(year_str)
+                    except ValueError:
+                        pass
                 isrc = tags_lower.get("isrc") or ""
                 duration = max(0.0, safe_float(str(fmt.get("duration", "0")), 0.0))
 
@@ -2029,12 +2042,18 @@ def probe_metadata(path: str) -> TrackMetadata:
             duration = online.duration_sec
         if cover_art is None and online.cover_art:
             cover_art = online.cover_art
+        if not genre and online.genre:
+            genre = online.genre
+        if year is None and online.year is not None:
+             year = online.year
 
     return TrackMetadata(
         duration,
         artist,
         album,
         title,
+        genre,
+        year,
         cover_art,
         has_video,
         video_fps,

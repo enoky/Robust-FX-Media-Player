@@ -17,7 +17,7 @@ USER_AGENT = "TempoPitch-Music-Player/1.0 (local)"
 ITUNES_API_URL = "https://itunes.apple.com/search"
 DEEZER_API_URL = "https://api.deezer.com/search"
 REQUEST_TIMEOUT_SEC = 7
-CACHE_SCHEMA_VERSION = 10  # Bumped for non-MB query tuning
+CACHE_SCHEMA_VERSION = 11  # Bumped for genre/year support
 COVER_NOT_FOUND_TTL_SEC = 7 * 24 * 60 * 60
 
 ONLINE_NOT_FOUND_TTL_SEC = 7 * 24 * 60 * 60
@@ -59,6 +59,8 @@ class OnlineMetadataResult:
     artist: str
     album: str
     title: str
+    genre: str
+    year: Optional[int]
     duration_sec: Optional[float]
     cover_art: Optional[bytes]
 
@@ -177,18 +179,20 @@ def get_online_metadata(
     artist = expected_artist
     album = expected_album
     title = expected_title
+    genre = ""
+    year = None
     duration_sec = None
 
     if metadata_item:
         if metadata_source == "itunes":
-            artist, album, title, duration_sec = _metadata_from_itunes_item(
+            artist, album, title, genre, year, duration_sec = _metadata_from_itunes_item(
                 metadata_item,
                 fallback_artist=expected_artist,
                 fallback_album=expected_album,
                 fallback_title=expected_title,
             )
         else:
-            artist, album, title, duration_sec = _metadata_from_deezer_item(
+            artist, album, title, genre, year, duration_sec = _metadata_from_deezer_item(
                 metadata_item,
                 fallback_artist=expected_artist,
                 fallback_album=expected_album,
@@ -325,6 +329,8 @@ def get_online_metadata(
             "artist": artist,
             "album": album,
             "title": title,
+            "genre": genre,
+            "year": year,
             "duration_sec": duration_sec,
         },
         "cover_art": cover_entry,
@@ -341,6 +347,8 @@ def get_online_metadata(
         artist=artist,
         album=album,
         title=title,
+        genre=genre,
+        year=year,
         duration_sec=duration_sec,
         cover_art=cover_bytes,
     )
@@ -590,10 +598,23 @@ def _metadata_from_itunes_item(
     fallback_artist: str,
     fallback_album: str,
     fallback_title: str,
-) -> tuple[str, str, str, Optional[float]]:
+) -> tuple[str, str, str, str, Optional[int], Optional[float]]:
     artist = str(item.get("artistName") or "").strip() or fallback_artist
     album = str(item.get("collectionName") or "").strip() or fallback_album
     title = str(item.get("trackName") or "").strip() or fallback_title
+    genre = str(item.get("primaryGenreName") or "").strip()
+    year = None
+    
+    release_date = str(item.get("releaseDate") or "")
+    if release_date:
+        # ISO format: 2005-03-01T08:00:00Z
+        try:
+            year_str = release_date.split("-")[0]
+            if year_str.isdigit():
+                year = int(year_str)
+        except Exception:
+            pass
+
     duration_sec = None
 
     track_ms = item.get("trackTimeMillis")
@@ -603,7 +624,7 @@ def _metadata_from_itunes_item(
         except Exception:
             duration_sec = None
 
-    return artist, album, title, duration_sec
+    return artist, album, title, genre, year, duration_sec
 
 
 def _metadata_from_deezer_item(
@@ -612,12 +633,28 @@ def _metadata_from_deezer_item(
     fallback_artist: str,
     fallback_album: str,
     fallback_title: str,
-) -> tuple[str, str, str, Optional[float]]:
+) -> tuple[str, str, str, str, Optional[int], Optional[float]]:
     artist_data = item.get("artist") or {}
     album_data = item.get("album") or {}
     artist = str(artist_data.get("name") or "").strip() or fallback_artist
     album = str(album_data.get("title") or "").strip() or fallback_album
     title = str(item.get("title") or "").strip() or fallback_title
+    genre = "" # Deezer search doesn't return genre usually
+    year = None
+    
+    # Check album release date if available, or fall back?
+    # Usually Deezer track object has 'release_date' or album object has it?
+    # In search results, album often lacks release_date. We might miss year from Deezer.
+    # Let's check item 'release_date' if present.
+    release_date = str(item.get("release_date") or album_data.get("release_date") or "")
+    if release_date:
+        try:
+             year_str = release_date.split("-")[0]
+             if year_str.isdigit():
+                 year = int(year_str)
+        except Exception:
+            pass
+
     duration_sec = None
 
     duration = item.get("duration")
@@ -627,7 +664,7 @@ def _metadata_from_deezer_item(
         except Exception:
             duration_sec = None
 
-    return artist, album, title, duration_sec
+    return artist, album, title, genre, year, duration_sec
 
 
 def _http_get_json(url: str) -> dict:
@@ -1435,6 +1472,8 @@ def _try_fetch_cover_for_cache(
         artist=cached.artist if cached else artist,
         album=cached.album if cached else album,
         title=cached.title if cached else title,
+        genre=cached.genre if cached else "", # Genre/Year not fetched in this flow yet
+        year=cached.year if cached else None,
         duration_sec=cached.duration_sec if cached else duration_sec,
         cover_art=cover_bytes,
     )
@@ -1445,6 +1484,15 @@ def _result_from_cache(entry: dict) -> Optional[OnlineMetadataResult]:
     artist = str(track.get("artist") or "").strip()
     album = str(track.get("album") or "").strip()
     title = str(track.get("title") or "").strip()
+    genre = str(track.get("genre") or "").strip()
+    year_raw = track.get("year")
+    year = None
+    if year_raw is not None:
+        try:
+             year = int(year_raw)
+        except Exception:
+             pass
+
     duration_sec = track.get("duration_sec")
     if duration_sec is not None:
         try:
@@ -1468,6 +1516,8 @@ def _result_from_cache(entry: dict) -> Optional[OnlineMetadataResult]:
         artist=artist,
         album=album,
         title=title,
+        genre=genre,
+        year=year,
         duration_sec=duration_sec,
         cover_art=cover_art,
     )
