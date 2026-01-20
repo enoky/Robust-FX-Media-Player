@@ -32,7 +32,16 @@ def build_stylesheet(theme: Theme) -> str:
     slider_track = adjust_color(theme.text, darker=220)
     slider_border = adjust_color(slider_track, darker=130)
     slider_handle_border = adjust_color(accent, darker=150)
-    return f"""
+    
+    # Pre-calc colors
+    base_lighter_102 = adjust_color(theme.base, lighter=102)
+    base_lighter_105 = adjust_color(theme.base, lighter=105)
+    base_lighter_110 = adjust_color(theme.base, lighter=110)
+    text_lighter_110 = adjust_color(theme.text, lighter=110)
+    
+    parts = []
+    
+    parts.append(f"""
         QMainWindow {{
             background: {theme.window};
         }}
@@ -49,6 +58,9 @@ def build_stylesheet(theme: Theme) -> str:
             background: {accent};
             color: #0b0b0b;
         }}
+    """)
+    
+    parts.append(f"""
         QSlider::handle:horizontal {{
             width: 14px;
             height: 14px;
@@ -93,6 +105,9 @@ def build_stylesheet(theme: Theme) -> str:
             background: {slider_track};
             border-radius: 3px;
         }}
+    """)
+
+    parts.append(f"""
         QGroupBox {{
             margin-top: 16px;
             padding: 12px;
@@ -133,6 +148,9 @@ def build_stylesheet(theme: Theme) -> str:
             background: {theme.highlight};
             color: #0b0b0b;
         }}
+    """)
+
+    parts.append(f"""
         QListWidget {{
             padding: 8px;
             border-radius: 10px;
@@ -168,6 +186,9 @@ def build_stylesheet(theme: Theme) -> str:
             font-size: 12px;
             color: {adjust_color(theme.text, lighter=120)};
         }}
+    """)
+
+    parts.append(f"""
         QLabel#status_label {{
             color: {adjust_color(theme.text, lighter=120)};
         }}
@@ -190,4 +211,112 @@ def build_stylesheet(theme: Theme) -> str:
         QSplitter::handle {{
             background: {adjust_color(theme.window, lighter=110)};
         }}
-    """
+    """)
+
+    # Library Specifics
+    parts.append(f"""
+        QLineEdit#search_bar {{
+            background: {base_lighter_105};
+            color: {theme.text};
+            border: 1px solid {border};
+            border-radius: 12px;
+            padding: 4px 12px;
+            font-size: 13px;
+        }}
+        QLineEdit#search_bar:focus {{
+            border: 1px solid {accent};
+            background: {theme.base};
+        }}
+        QTableView {{
+            background: {base_lighter_102};
+            color: {theme.text};
+            gridline-color: {border};
+            selection-background-color: {adjust_color(accent, alpha=60)};
+            selection-color: #ffffff;
+            border: 1px solid {border};
+            border-radius: 8px;
+            outline: none;
+        }}
+        QTableView::item {{
+            padding: 2px 6px;
+            border: none;
+        }}
+        QTableView::item:selected {{
+            background: {adjust_color(accent, alpha=60)};
+            color: #ffffff;
+            border-radius: 4px;
+        }}
+        QTableView::item:hover {{
+            background: {base_lighter_110};
+        }}
+    """)
+
+    parts.append(f"""
+        QHeaderView::section {{
+            background: {base_lighter_105};
+            color: {theme.text};
+            padding: 6px;
+            border: none;
+            border-bottom: 2px solid {border};
+            border-right: 1px solid {adjust_color(theme.base, lighter=115)};
+            font-weight: 700;
+            font-size: 12px;
+            text-transform: uppercase;
+        }}
+        QTreeWidget {{
+            background: {base_lighter_102};
+            color: {theme.text};
+            border: 1px solid {border};
+            border-radius: 8px;
+            padding: 4px;
+            outline: none;
+        }}
+        QTreeWidget::item {{
+            padding: 8px; /* Taller items */
+            border-radius: 6px;
+            color: {text_lighter_110};
+        }}
+        QTreeWidget::item:hover {{
+            background: {base_lighter_110};
+            color: {theme.text};
+        }}
+        QTreeWidget::item:selected {{
+            background: {adjust_color(accent, alpha=40)};
+            color: {theme.text};
+            border: 1px solid {adjust_color(accent, alpha=60)};
+        }}
+    """)
+
+    parts.append(f"""
+        QScrollBar:vertical {{
+            background: {theme.base};
+            width: 16px;
+            margin: 0px;
+            border-radius: 8px;
+        }}
+        QScrollBar::handle:vertical {{
+            background: {adjust_color(theme.card, lighter=120)};
+            min-height: 20px;
+            border-radius: 8px;
+            margin: 2px;
+        }}
+        QScrollBar::handle:vertical:hover {{
+            background: {accent};
+        }}
+        QLabel#track_count_label {{
+            color: {adjust_color(theme.text, lighter=120)};
+            font-weight: 600;
+            font-size: 12px;
+            padding: 4px 8px;
+            background: {theme.card};
+            border: 1px solid {border};
+            border-radius: 6px;
+        }}
+        QFrame#library_toolbar {{
+            background: transparent;
+            border-bottom: 1px solid {border};
+            margin-bottom: 4px;
+        }}
+    """)
+    
+    return "\n".join(parts)

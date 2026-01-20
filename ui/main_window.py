@@ -947,14 +947,9 @@ class MainWindow(QtWidgets.QMainWindow):
         if ext:
             meta_parts.append(ext)
         self.track_meta.setText(" • ".join(meta_parts))
-        idx = self.playlist.index_for_path(track.path)
-        if idx < 0:
-            idx = self.playlist.current_index()
-        if idx < 0:
-            idx = self._current_index
-        if idx >= 0:
-            self._current_index = idx
-        self.playlist.set_playing_index(idx)
+        # Highlight in library if present
+        # Note: We don't have a direct "find index by path" in the table model easily
+        # without iterating. For now, we skip auto-selection to avoid O(N) lag.
         self._set_media_mode(track.has_video)
         self._set_artwork(track.cover_art)
         self._dur = track.duration_sec
@@ -1058,18 +1053,15 @@ class MainWindow(QtWidgets.QMainWindow):
             self.fx_status.setText(label_text)
 
     def closeEvent(self, e: QtGui.QCloseEvent):
-        self._stop_folder_scan_worker()
-        self._stop_metadata_worker()
+        # self._stop_folder_scan_worker() # Legacy
+        # self._stop_metadata_worker()    # Legacy
         self._save_ui_settings()
-        paths = self.playlist.track_paths()
-        if self._pending_tracks:
-            paths.extend(t.path for t in self._pending_tracks)
-        self.settings.setValue("playlist/paths", paths)
-        current_index = self.playlist.current_index()
-        if current_index < 0:
-            current_index = self._current_index
-        self.settings.setValue("playlist/current_index", current_index)
-        self.settings.setValue("playlist/position_sec", self.engine.get_position())
+        
+        # Save Library session
+        self.settings.setValue("library/current_index", self._current_index)
+        if self.engine.track:
+             self.settings.setValue("library/current_path", self.engine.track.path)
+
         self.engine.stop()
         super().closeEvent(e)
 
@@ -1431,6 +1423,10 @@ class MainWindow(QtWidgets.QMainWindow):
         if self.engine.track:
              self.settings.setValue("library/current_path", self.engine.track.path)
 
+    def _save_effect_toggle_settings(self) -> None:
+        for name, checkbox in self.effect_toggles.items():
+            self._save_checkbox_setting(self._effect_setting_key(name), checkbox)
+
     @staticmethod
     def _normalize_eq_gains(values: object, band_count: int) -> list[float]:
         if isinstance(values, (tuple, list)):
@@ -1510,22 +1506,6 @@ class MainWindow(QtWidgets.QMainWindow):
         if saved_index >= 0:
             self._current_index = saved_index
             self.library_widget.table.selectRow(saved_index)
-        saved_paths = self.settings.value("playlist/paths", [], type=list)
-        saved_index = self.settings.value("playlist/current_index", -1, type=int)
-        saved_pos = self.settings.value("playlist/position_sec", 0.0, type=float)
-
-        def restore_position():
-            if saved_index is None:
-                return
-            idx = int(saved_index)
-            if 0 <= idx < self.playlist.count():
-                self._current_index = idx
-                self.playlist.select_index(idx)
-                track = self.playlist.get_track(idx)
-                if track:
-                    self.engine.load_track(track.path)
-                    if saved_pos and saved_pos > 0:
-                        self.engine.seek(float(saved_pos))
 
     def _closeEvent(self, event: QtGui.QCloseEvent):
         self._save_ui_settings()
@@ -1534,7 +1514,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def _on_state_changed(self, state: PlayerState):
         if state == PlayerState.STOPPED:
             # Check if we should auto-advance
-            if self.engine.track is not None and not self.engine.is_paused():
+            if self.engine.track is not None and self.engine.state != PlayerState.PAUSED:
                 # Natural end of track
                 self._advance_track(direction=1, auto=True)
             self.status.setText("Stopped.")

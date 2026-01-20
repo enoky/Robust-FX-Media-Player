@@ -43,10 +43,12 @@ def env_flag(name: str) -> bool:
     return value in {"1", "true", "yes", "on"}
 
 
-def adjust_color(color: str, *, lighter: Optional[int] = None, darker: Optional[int] = None) -> str:
+def adjust_color(color: str, *, lighter: Optional[int] = None, darker: Optional[int] = None, alpha: Optional[int] = None) -> str:
     qt_color = QtGui.QColor(color)
     if lighter is not None:
         qt_color = qt_color.lighter(lighter)
     if darker is not None:
         qt_color = qt_color.darker(darker)
-    return qt_color.name()
+    if alpha is not None:
+        qt_color.setAlpha(alpha)
+    return qt_color.name(QtGui.QColor.NameFormat.HexArgb) if alpha is not None else qt_color.name()
