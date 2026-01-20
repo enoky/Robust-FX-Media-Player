@@ -270,10 +270,11 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.effects_toggle_group = QtWidgets.QGroupBox("FX Enable")
         self.effects_toggle_group.setObjectName("effects_toggle_group")
-        effects_toggle_layout = QtWidgets.QGridLayout(self.effects_toggle_group)
+        effects_toggle_layout = QtWidgets.QVBoxLayout(self.effects_toggle_group)
         effects_toggle_layout.setContentsMargins(8, 8, 8, 8)
-        effects_toggle_layout.setHorizontalSpacing(16)
-        effects_toggle_layout.setVerticalSpacing(6)
+        effects_toggle_layout.setSpacing(6)
+        effects_toggle_layout.addStretch(1) # Push checkboxes to top or center? Let's keep them at top.
+        # Actually, let's put stretch at the end of loop.
         self.effect_toggles: dict[str, QtWidgets.QCheckBox] = {}
         effect_names = [
             "Dynamic EQ",
@@ -290,9 +291,8 @@ class MainWindow(QtWidgets.QMainWindow):
             checkbox = QtWidgets.QCheckBox(name)
             checkbox.setAccessibleName(f"{name} enable")
             checkbox.toggled.connect(lambda checked, effect_name=name: self._on_effect_toggled(effect_name, checked))
-            row = index // 3
-            col = index % 3
-            effects_toggle_layout.addWidget(checkbox, row, col)
+            effects_toggle_layout.insertWidget(index, checkbox) # Insert before stretch if we added one, or just add.
+
             self.effect_toggles[name] = checkbox
 
         self.main_tabs = QtWidgets.QTabWidget()
@@ -322,7 +322,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.main_tabs.addTab(player_tab, "Player")
 
         fx_tab = QtWidgets.QWidget()
-        fx_layout = QtWidgets.QVBoxLayout(fx_tab)
+        fx_layout = QtWidgets.QHBoxLayout(fx_tab)
         fx_layout.setContentsMargins(12, 12, 12, 12)
         fx_layout.setSpacing(10)
         fx_layout.addWidget(self.effects_toggle_group)
