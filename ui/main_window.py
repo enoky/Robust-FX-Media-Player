@@ -301,9 +301,22 @@ class MainWindow(QtWidgets.QMainWindow):
         player_layout = QtWidgets.QVBoxLayout(player_tab)
         player_layout.setContentsMargins(12, 12, 12, 12)
         player_layout.setSpacing(10)
-        player_layout.addWidget(self.transport)
-        player_layout.addWidget(self.visualizer)
-        player_layout.addWidget(self.header_frame)
+
+        # Top row: Left (Transport + Viz) | Right (Metadata)
+        top_row = QtWidgets.QHBoxLayout()
+        
+        # Left column
+        left_col = QtWidgets.QVBoxLayout()
+        left_col.setSpacing(10)
+        left_col.addWidget(self.transport)
+        left_col.addWidget(self.visualizer)
+        # Visualizer expands horizontally, but fixed height. 
+        # Let's add a stretch to separate them if needed, or just let them stack.
+        
+        top_row.addLayout(left_col, 2) # Give main controls more width weight
+        top_row.addWidget(self.header_frame, 1)
+
+        player_layout.addLayout(top_row)
         player_layout.addWidget(self.dsp_widget)
         player_layout.addStretch(1)
         self.main_tabs.addTab(player_tab, "Player")
