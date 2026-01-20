@@ -333,15 +333,15 @@ class MainWindow(QtWidgets.QMainWindow):
         leftw = QtWidgets.QWidget()
         leftw.setLayout(left)
 
-        splitter = QtWidgets.QSplitter()
+        splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Vertical)
         splitter.addWidget(leftw)
         splitter.addWidget(self.library_widget)
-        splitter.setStretchFactor(0, 2)
-        splitter.setStretchFactor(1, 1)
+        splitter.setStretchFactor(0, 0)  # Top (Player) - let it take natural size or minimal
+        splitter.setStretchFactor(1, 1)  # Bottom (Library) - expands
         splitter.setChildrenCollapsible(False)
         splitter.setHandleWidth(2)
         self.setCentralWidget(splitter)
-        splitter.setSizes([2, 1])
+        # splitter.setSizes([2, 1]) # Let layout determine initial sizes or set specifically if needed
 
         # Menu
         file_menu = self.menuBar().addMenu("&File")
