@@ -1911,6 +1911,7 @@ def probe_metadata(path: str) -> TrackMetadata:
     title = ""
     genre = ""
     year: Optional[int] = None
+    track_number: Optional[int] = None
     isrc = ""
     cover_art = None
     has_video = False
@@ -1929,7 +1930,7 @@ def probe_metadata(path: str) -> TrackMetadata:
                     "json",
                     "-show_entries",
                     (
-                        "format=duration:format_tags=artist,album,album_artist,title,genre,date,isrc:"
+                        "format=duration:format_tags=artist,album,album_artist,title,genre,date,track,isrc:"
                         "stream=index,codec_type,width,height:stream_disposition=attached_pic:"
                         "stream_tags=comment,title,mimetype"
                     ),
@@ -1958,6 +1959,18 @@ def probe_metadata(path: str) -> TrackMetadata:
                             year = int(year_str)
                     except ValueError:
                         pass
+                
+                track_str = tags_lower.get("track") or ""
+                track_number = None
+                if track_str:
+                    try:
+                        # Handle "1", "1/12", etc.
+                        t_part = track_str.split("/")[0].strip()
+                        if t_part.isdigit():
+                            track_number = int(t_part)
+                    except ValueError:
+                        pass
+
                 isrc = tags_lower.get("isrc") or ""
                 duration = max(0.0, safe_float(str(fmt.get("duration", "0")), 0.0))
 
@@ -2054,6 +2067,7 @@ def probe_metadata(path: str) -> TrackMetadata:
         title,
         genre,
         year,
+        track_number,
         cover_art,
         has_video,
         video_fps,

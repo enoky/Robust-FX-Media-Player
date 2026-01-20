@@ -85,6 +85,7 @@ class TrackMetadata:
     title: str
     genre: str
     year: Optional[int]
+    track_number: Optional[int]
     cover_art: Optional[bytes]
     has_video: bool
     video_fps: float
