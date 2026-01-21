@@ -47,11 +47,11 @@ from dsp import (
     DynamicEqEffect,
     SubharmonicEffect,
     EffectsChain,
-    build_track,
     make_dsp,
     make_ffmpeg_cmd,
     make_ffmpeg_video_cmd,
 )
+from metadata import build_track
 from models import AudioParams, BufferPreset, PlayerState, RepeatMode, Track
 from utils import clamp, env_flag, have_exe
 
