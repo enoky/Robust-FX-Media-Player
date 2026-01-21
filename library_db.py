@@ -37,6 +37,12 @@ class LibraryTrack:
     play_count: int
     cover_art_hash: Optional[str]
 
+    @property
+    def norm_path(self) -> str:
+        if not hasattr(self, "_cached_norm_path"):
+            self._cached_norm_path = os.path.normpath(self.path)
+        return self._cached_norm_path
+
     def to_dict(self) -> dict:
         return {
             "id": self.id,

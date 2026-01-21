@@ -98,7 +98,7 @@ class LibraryTableModel(QtCore.QAbstractTableModel):
 
         elif role == QtCore.Qt.ItemDataRole.BackgroundRole:
             # Check normalized paths
-            track_path = os.path.normpath(track.path) if track.path else None
+            track_path = track.norm_path if track.path else None
             
             if self._current_path and track_path == self._current_path:
                 # Use theme highlight color with transparency

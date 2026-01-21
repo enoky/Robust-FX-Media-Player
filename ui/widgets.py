@@ -191,7 +191,7 @@ class VisualizerWidget(QtWidgets.QWidget):
         self._bin_counts[self._bin_counts == 0] = 1.0
         self._levels = np.zeros(self._bar_count, dtype=np.float32)
         self._timer = QtCore.QTimer(self)
-        self._timer.setInterval(20)
+        self._timer.setInterval(33)
         self._timer.timeout.connect(self._pull_frames)
         self._timer.start()
         self.setMinimumHeight(140)
@@ -207,7 +207,7 @@ class VisualizerWidget(QtWidgets.QWidget):
             delay_sec=delay_sec,
         )
         if frames.size == 0:
-            self._bar_levels *= 0.85
+            self._bar_levels *= 0.75
             self.update()
             return
         mono = frames[:, 0] if frames.ndim == 2 else frames.reshape(-1)
@@ -229,7 +229,7 @@ class VisualizerWidget(QtWidgets.QWidget):
             magnitudes /= peak
         np.add.reduceat(magnitudes, self._bin_edges[:-1], out=self._levels)
         self._levels /= self._bin_counts
-        self._bar_levels *= 0.85
+        self._bar_levels *= 0.75
         np.maximum(self._bar_levels, self._levels, out=self._bar_levels)
         self.update()
 
