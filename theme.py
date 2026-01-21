@@ -246,9 +246,6 @@ def build_stylesheet(theme: Theme) -> str:
             color: #ffffff;
             border-radius: 4px;
         }}
-        QTableView::item:hover {{
-            background: {base_lighter_110};
-        }}
     """)
 
     parts.append(f"""
