@@ -317,19 +317,61 @@ class LibraryWidget(QtWidgets.QWidget):
         # Artists
         artists_item = QtWidgets.QTreeWidgetItem(self.sidebar, ["Artists"])
         artists_item.setIcon(0, render_svg_icon(SVG_ICON_TEMPLATES["user"], text_color, 16))
+        
         artists = self._library.get_artists()
         for artist in artists:
             item = QtWidgets.QTreeWidgetItem(artists_item, [artist])
             item.setData(0, QtCore.Qt.ItemDataRole.UserRole, f"artist:{artist}")
             
-        self.sidebar.expandItem(artists_item)
+        # Albums (store item for updates)
+        self.albums_item = QtWidgets.QTreeWidgetItem(self.sidebar, ["Albums"])
+        self.albums_item.setIcon(0, render_svg_icon(SVG_ICON_TEMPLATES["disc"], text_color, 16))
+        self._populate_albums(None) # Initially populate with all
+
+        # Genres
+        genres_item = QtWidgets.QTreeWidgetItem(self.sidebar, ["Genres"])
+        genres_item.setIcon(0, render_svg_icon(SVG_ICON_TEMPLATES["tag"], text_color, 16))
         
-        # Refresh table (default to all tracks)
+        genres = self._library.get_genres()
+        for genre in genres:
+            item = QtWidgets.QTreeWidgetItem(genres_item, [genre])
+            item.setData(0, QtCore.Qt.ItemDataRole.UserRole, f"genre:{genre}")
+
+        # Expand items
+        self.sidebar.expandItem(artists_item)
+        self.sidebar.expandItem(self.albums_item)
+        self.sidebar.expandItem(genres_item)
+        
+        # Refresh table
         self._load_tracks(self._library.get_all_tracks())
         
         # Initial icon update just in case
         if self.add_folder_btn.icon().isNull():
              self._update_icons()
+
+    def _populate_albums(self, artist_filter: Optional[str]):
+        """Populate the Albums tree item, optionally filtering by artist."""
+        if not hasattr(self, 'albums_item'):
+            return
+            
+        # Clear existing children
+        self.albums_item.takeChildren()
+        
+        albums = self._library.get_albums(artist_filter)
+        # Sort albums by name
+        albums.sort(key=lambda x: x[0].lower())
+        
+        for album, artist in albums:
+            # Display as "Album (Artist)" or just "Album" if artist is unknown
+            # If we are filtering by artist, maybe just show Album name? 
+            # Current requirement: "only show albums from that artist".
+            # It's cleaner to keep the format consistent or simplify if redundant.
+            # Let's keep consistent for now.
+            label = f"{album} ({artist})" if artist else album
+            item = QtWidgets.QTreeWidgetItem(self.albums_item, [label])
+            
+            safe_val = f"{album}|{artist}" if artist else album
+            item.setData(0, QtCore.Qt.ItemDataRole.UserRole, f"album:{safe_val}")
 
     def _load_tracks(self, tracks: List[LibraryTrack]):
         # consistently sort tracks by Artist -> Album -> Track Number -> Title
@@ -348,13 +390,16 @@ class LibraryWidget(QtWidgets.QWidget):
         self.table.resizeColumnsToContents()
         
         # Adjust column widths
-        # Adjust column widths
         self.table.setColumnWidth(0, 40) # Track Number
         self.table.setColumnWidth(1, 240) # Title
         self.table.setColumnWidth(2, 200) # Artist
         self.table.setColumnWidth(3, 200) # Album
         
         self.track_count_label.setText(f"{len(tracks)} tracks")
+        
+        # Restore current path indicator if set
+        if self._current_track_path:
+            self._model.set_current_path(self._current_track_path)
 
     def _on_search_changed(self, text: str):
         tracks = self._library.search(text)
@@ -368,9 +413,32 @@ class LibraryWidget(QtWidgets.QWidget):
             
         if data == "all":
             self._load_tracks(self._library.get_all_tracks())
+            self._populate_albums(None) # Show all albums
         elif data.startswith("artist:"):
             artist = data.split(":", 1)[1]
             self._load_tracks(self._library.get_tracks_by_artist(artist))
+            # Filter albums list to only this artist
+            self._populate_albums(artist)
+            # Expand albums to show the user the filtered list
+            self.sidebar.expandItem(self.albums_item)
+        elif data.startswith("album:"):
+            # Format is "album:Name" or "album:Name|Artist"
+            val = data.split(":", 1)[1]
+            if "|" in val:
+                album, artist = val.rsplit("|", 1)
+                self._load_tracks(self._library.get_tracks_by_album(album, artist))
+            else:
+                self._load_tracks(self._library.get_tracks_by_album(val))
+        elif data.startswith("genre:"):
+            genre = data.split(":", 1)[1]
+            self._load_tracks(self._library.get_tracks_by_genre(genre))
+            # Maybe reset albums logic here or keep it as is? 
+            # User request: "only show all albums when All Tracks is selected" 
+            # implies logic should reset on All Tracks, but is vague on Genre.
+            # Assuming Genre selection shouldn't filter Albums list strictly (or it's complex).
+            # Let's default to showing ALL albums if they switch to Genre, 
+            # unless they specifically wanted to filter albums by genre too (out of scope).
+            self._populate_albums(None)
 
     def _on_table_double_click(self, index: QtCore.QModelIndex):
         track = self._model.data(index, QtCore.Qt.ItemDataRole.UserRole)

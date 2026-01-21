@@ -282,13 +282,26 @@ class LibraryService:
         """Get all unique artists."""
         return self._db.get_all_artists()
 
-    def get_albums(self) -> List[tuple[str, str]]:
-        """Get all albums as (album, artist) tuples."""
+    def get_albums(self, artist: Optional[str] = None) -> List[tuple[str, str]]:
+        """
+        Get all albums as (album, artist) tuples.
+        If artist is provided, returns only albums by that artist.
+        """
+        if artist:
+            return self._db.get_albums_by_artist(artist)
         return self._db.get_all_albums()
+        
+    def get_genres(self) -> List[str]:
+        """Get all unique genres."""
+        return self._db.get_all_genres()
 
     def get_tracks_by_artist(self, artist: str) -> List[LibraryTrack]:
         """Get all tracks by an artist."""
         return self._db.get_tracks_by_artist(artist)
+
+    def get_tracks_by_genre(self, genre: str) -> List[LibraryTrack]:
+        """Get all tracks by genre."""
+        return self._db.get_tracks_by_genre(genre)
 
     def get_tracks_by_album(self, album: str, artist: str = "") -> List[LibraryTrack]:
         """Get all tracks from an album."""

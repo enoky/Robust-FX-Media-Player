@@ -405,18 +405,43 @@ class LibraryDatabase:
             )
             return [(row["album"], row["artist"]) for row in cur.fetchall()]
 
-    def get_albums_by_artist(self, artist: str) -> List[str]:
+    def get_albums_by_artist(self, artist: str) -> List[tuple[str, str]]:
         """Get all albums by a specific artist."""
         with self._cursor() as cur:
+            # We also return artist to match format of get_all_albums even though it's redundant here
             cur.execute(
                 """
-                SELECT DISTINCT album FROM tracks
+                SELECT DISTINCT album, artist
+                FROM tracks 
                 WHERE artist = ? AND album IS NOT NULL AND album != ''
                 ORDER BY album COLLATE NOCASE
                 """,
-                (artist,),
+                (artist,)
             )
-            return [row["album"] for row in cur.fetchall()]
+            return [(row[0], row[1]) for row in cur.fetchall()]
+
+    def get_all_genres(self) -> List[str]:
+        """Get list of all unique genres."""
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                SELECT DISTINCT genre
+                FROM tracks 
+                WHERE genre IS NOT NULL AND genre != ''
+                ORDER BY genre COLLATE NOCASE
+                """
+            )
+            return [row[0] for row in cur.fetchall()]
+
+    def get_tracks_by_genre(self, genre: str) -> List[LibraryTrack]:
+        """Get all tracks in a specific genre."""
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT * FROM tracks WHERE genre = ? ORDER BY artist, album, track_number",
+                (genre,)
+            )
+            return [_row_to_track(row) for row in cur.fetchall()]
+
 
     # -------------------------------------------------------------------------
     # Playback Tracking
