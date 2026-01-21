@@ -602,6 +602,102 @@ class TempoPitchWidget(QtWidgets.QGroupBox):
         self.controlsChanged.emit(tempo, pitch, key_lock, tape, lock_432)
 
 
+
+class EqualizerSlider(QtWidgets.QSlider):
+    def __init__(self, parent=None):
+        super().__init__(QtCore.Qt.Orientation.Vertical, parent)
+        self.setRange(-120, 120)  # -12.0 to +12.0 dB in 0.1 steps
+        self.setValue(0)
+        self.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Preferred,
+            QtWidgets.QSizePolicy.Policy.Expanding,
+        )
+        self.setMinimumWidth(30)
+
+    def paintEvent(self, event: QtGui.QPaintEvent):
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+
+        # Retrieve palette colors
+        palette = self.palette()
+        bg_color = palette.color(QtGui.QPalette.ColorRole.Base).darker(110)
+        active_color = palette.color(QtGui.QPalette.ColorRole.Highlight)
+        handle_color = palette.color(QtGui.QPalette.ColorRole.Button)
+        handle_border = palette.color(QtGui.QPalette.ColorRole.Mid)
+
+        rect = self.rect()
+        w = rect.width()
+        h = rect.height()
+
+        # Track geometry
+        track_w = 4
+        track_x = (w - track_w) / 2
+        # Add some padding top/bottom so handle doesn't clip
+        padding = 7 
+        track_h = h - (padding * 2)
+        track_y = padding
+
+        # Draw full track background
+        painter.setPen(QtCore.Qt.PenStyle.NoPen)
+        painter.setBrush(bg_color)
+        track_rect = QtCore.QRectF(track_x, track_y, track_w, track_h)
+        painter.drawRoundedRect(track_rect, 2, 2)
+
+        # Value mapping
+        # Min (-120) at bottom, Max (+120) at top
+        val = self.value()
+        mn = self.minimum()
+        mx = self.maximum()
+        rng = mx - mn
+        if rng == 0:
+            return
+
+        # Y position calculation (0 at bottom effectively for calc, then flip)
+        # But Qt coords: 0 is top.
+        # normalized position from bottom (0.0 to 1.0)
+        norm_val = (val - mn) / rng
+        center_norm = (0 - mn) / rng
+
+        def get_y(norm):
+            return track_y + track_h - (norm * track_h)
+
+        y_now = get_y(norm_val)
+        y_center = get_y(center_norm)
+
+        # Draw active fill from center to current
+        painter.setBrush(active_color)
+        
+        # Avoid drawing 0-height rect
+        if val != 0:
+            top = min(y_now, y_center)
+            dist = abs(y_now - y_center)
+            fill_rect = QtCore.QRectF(track_x, top, track_w, dist)
+            painter.drawRoundedRect(fill_rect, 2, 2)
+        
+        # Center marker (small horizontal line behind track or on top?)
+        # Let's draw it on the track background before fill? 
+        # Actually a small tick mark at center is helpful.
+        painter.setPen(QtGui.QPen(palette.color(QtGui.QPalette.ColorRole.PlaceholderText), 1))
+        painter.drawLine(
+            QtCore.QPointF(track_x - 4, y_center), 
+            QtCore.QPointF(track_x + track_w + 4, y_center)
+        )
+
+        # Handle
+        handle_size = 14
+        handle_x = (w - handle_size) / 2
+        handle_y_pos = y_now - (handle_size / 2)
+        handle_rect = QtCore.QRectF(handle_x, handle_y_pos, handle_size, handle_size)
+
+        gradient = QtGui.QLinearGradient(handle_rect.topLeft(), handle_rect.bottomLeft())
+        gradient.setColorAt(0, handle_color.lighter(105))
+        gradient.setColorAt(1, handle_color.darker(105))
+        
+        painter.setPen(QtGui.QPen(handle_border, 1.5))
+        painter.setBrush(gradient)
+        painter.drawEllipse(handle_rect)
+
+
 class EqualizerWidget(QtWidgets.QGroupBox):
     gainsChanged = QtCore.Signal(object)
 
@@ -609,7 +705,7 @@ class EqualizerWidget(QtWidgets.QGroupBox):
         super().__init__("Equalizer", parent)
 
         self.presets_map = {
-            "Flat": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "Flat": [0.0] * 10,
             "Bass Boost": [6.0, 5.0, 4.0, 2.0, 0.0, -1.0, -2.0, -2.0, -2.0, -2.0],
             "Treble Boost": [-2.0, -2.0, -1.0, 0.0, 1.0, 3.0, 5.0, 6.0, 6.0, 6.0],
             "Vocal": [-2.0, -1.0, 0.0, 2.0, 4.0, 4.0, 2.0, 0.0, -1.0, -2.0],
@@ -634,38 +730,52 @@ class EqualizerWidget(QtWidgets.QGroupBox):
         header.addWidget(self.reset_btn)
 
         bands = ["31", "62", "125", "250", "500", "1k", "2k", "4k", "8k", "16k"]
-        self.band_sliders: List[QtWidgets.QSlider] = []
+        self.band_sliders: List[EqualizerSlider] = []
+        self.db_labels: List[QtWidgets.QLabel] = []
 
         sliders_layout = QtWidgets.QHBoxLayout()
-        sliders_layout.setSpacing(6)
+        sliders_layout.setSpacing(8)
+        
         for band in bands:
-            slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Vertical)
-            slider.setRange(-12, 12)
-            slider.setValue(0)
-            slider.setTickPosition(QtWidgets.QSlider.TickPosition.TicksBothSides)
-            slider.setTickInterval(3)
+            slider = EqualizerSlider()
             slider.setToolTip(f"{band} Hz band")
             slider.setAccessibleName(f"{band} Hz band")
 
+            db_label = QtWidgets.QLabel("0.0")
+            db_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignHCenter)
+            font = db_label.font()
+            font.setPointSize(9)
+            db_label.setFont(font)
+            # Use placeholder color or slightly dimmer
+            
             band_label = QtWidgets.QLabel(band)
             band_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignHCenter)
+            band_label.setStyleSheet("color: #888888; font-weight: bold;")
 
             column = QtWidgets.QVBoxLayout()
+            column.setSpacing(4)
+            column.addWidget(db_label)
             column.addWidget(slider, 1, QtCore.Qt.AlignmentFlag.AlignHCenter)
             column.addWidget(band_label)
-            sliders_layout.addLayout(column)
+            sliders_layout.addLayout(column, 1) # Equal stretch
+
             self.band_sliders.append(slider)
+            self.db_labels.append(db_label)
 
         layout = QtWidgets.QVBoxLayout(self)
+        layout.setContentsMargins(12, 16, 12, 16)
         layout.addLayout(header)
+        layout.addSpacing(10)
         layout.addLayout(sliders_layout)
 
         self.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Preferred)
 
         self.reset_btn.clicked.connect(self._on_reset)
         self.presets.currentTextChanged.connect(self._on_preset_changed)
-        for slider in self.band_sliders:
-            slider.valueChanged.connect(self._on_slider_changed)
+        
+        for i, slider in enumerate(self.band_sliders):
+            # Connect using closure to capture index
+            slider.valueChanged.connect(lambda val, idx=i: self._on_slider_val_changed(idx, val))
             slider.sliderReleased.connect(self._on_slider_released)
 
         self._apply_gains(self.presets_map["Flat"], emit=False)
@@ -679,12 +789,18 @@ class EqualizerWidget(QtWidgets.QGroupBox):
         else:
             self._emit_gains()
 
-    def _on_slider_changed(self, _value: int):
+    def _on_slider_val_changed(self, index: int, value: int):
+        # Update label
+        db_val = value / 10.0
+        self.db_labels[index].setText(f"{db_val:+.1f}")
+        
+        # Check Custom preset status
         current = self.presets.currentText()
         if current in self.presets_map and not self._gains_match(self.presets_map[current]):
             self.presets.blockSignals(True)
             self.presets.setCurrentText("Custom")
             self.presets.blockSignals(False)
+        
         self._gains_timer.start()
 
     def _on_slider_released(self):
@@ -694,9 +810,11 @@ class EqualizerWidget(QtWidgets.QGroupBox):
     def _apply_gains(self, gains: list[float], emit: bool = True):
         if len(gains) != len(self.band_sliders):
             return
-        for slider, gain in zip(self.band_sliders, gains):
+        for i, (slider, gain) in enumerate(zip(self.band_sliders, gains)):
             slider.blockSignals(True)
-            slider.setValue(int(round(clamp(float(gain), -12.0, 12.0))))
+            val = int(round(clamp(float(gain), -12.0, 12.0) * 10))
+            slider.setValue(val)
+            self.db_labels[i].setText(f"{val/10.0:+.1f}")
             slider.blockSignals(False)
         if emit:
             self._gains_timer.stop()
@@ -706,7 +824,7 @@ class EqualizerWidget(QtWidgets.QGroupBox):
         self.gainsChanged.emit(self.gains())
 
     def gains(self) -> list[float]:
-        return [float(slider.value()) for slider in self.band_sliders]
+        return [slider.value() / 10.0 for slider in self.band_sliders]
 
     def set_gains(self, gains: list[float], preset: Optional[str] = None, emit: bool = False):
         if preset:
@@ -724,7 +842,9 @@ class EqualizerWidget(QtWidgets.QGroupBox):
     def _gains_match(self, gains: list[float]) -> bool:
         if len(gains) != len(self.band_sliders):
             return False
-        return all(int(round(g)) == slider.value() for g, slider in zip(gains, self.band_sliders))
+        # Compare with tolerance due to float conversion or slider step
+        current_gains = self.gains()
+        return all(abs(g - cg) < 0.15 for g, cg in zip(gains, current_gains))
 
 
 class ReverbWidget(QtWidgets.QGroupBox):
