@@ -844,8 +844,13 @@ def _score_itunes_result(
             artist_sim = _string_similarity(artist_name, expected_artist_norm)
         except Exception:
             artist_sim = 0.0
-        if artist_sim < 0.2:
-            score -= 20
+        
+        # Stricter Artist Penalty:
+        # If similarity is very low, we must reject it even if Title matches perfectly.
+        if artist_sim < 0.35:
+            score -= 100
+        elif artist_sim < 0.6:
+            score -= 30
 
     if expected_album_norm and collection_name:
         score += int(_string_similarity(collection_name, expected_album_norm) * 35)
@@ -1120,8 +1125,12 @@ def _score_deezer_result(
             artist_sim = _string_similarity(artist_name, expected_artist_norm)
         except Exception:
             artist_sim = 0.0
-        if artist_sim < 0.2:
-            score -= 20
+        
+        # Stricter Artist Penalty
+        if artist_sim < 0.35:
+            score -= 100
+        elif artist_sim < 0.6:
+            score -= 30
 
     if expected_album_norm and album_title:
         score += int(_string_similarity(album_title, expected_album_norm) * 35)
