@@ -293,7 +293,17 @@ def get_online_metadata(
 
     if cover_bytes and cover_info:
         if not cover_cache_key:
+            # Try to make a stable key from Artist + Album if we have them,
+            # so multiple tracks from the same album share the same file.
+            if artist and album:
+                normalized = _normalize_match_text(f"{artist} {album}")
+                if normalized:
+                     digest = hashlib.sha1(normalized.encode("utf-8", "ignore")).hexdigest()
+                     cover_cache_key = f"generic_{digest}"
+        
+        if not cover_cache_key:
             cover_cache_key = _cache_key(path)
+
         cover_filename = _build_cover_filename(cover_cache_key, cover_info)
         cover_path = os.path.join(CACHE_DIR, cover_filename)
         if not os.path.exists(cover_path):
@@ -894,9 +904,12 @@ def _cover_from_deezer_item(
         or album_data.get("cover_medium")
     )
     cache_key = ""
-    item_id = item.get("id")
-    if item_id:
-        cache_key = f"deezer_release_{item_id}"
+    album_id = str(album_data.get("id") or "")
+    if album_id:
+        cache_key = f"deezer_album_{album_id}"
+    elif item.get("id"):
+        # Fallback to track ID if album ID is missing (rare)
+        cache_key = f"deezer_track_{item.get('id')}"
 
     if cache_key:
         cached_bytes, cached_info, cached_filename = _find_existing_cover_file(cache_key)
@@ -1166,7 +1179,12 @@ def _fetch_cover_from_deezer(
         return None, "", "", item
 
     # Deezer cache key
-    cache_key = f"deezer_release_{item.get('id')}"
+    cache_key = ""
+    album_id = str(album_data.get("id") or "")
+    if album_id:
+        cache_key = f"deezer_album_{album_id}"
+    elif item.get("id"):
+        cache_key = f"deezer_track_{item.get('id')}"
 
     # Check existing cache
     if cache_key:
