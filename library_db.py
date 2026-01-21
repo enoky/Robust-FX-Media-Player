@@ -215,7 +215,7 @@ class LibraryDatabase:
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    track.path,
+                    os.path.normpath(track.path),
                     track.title,
                     track.artist,
                     track.album,
@@ -264,7 +264,7 @@ class LibraryDatabase:
                 WHERE id = ?
                 """,
                 (
-                    track.path,
+                    os.path.normpath(track.path),
                     track.title,
                     track.artist,
                     track.album,
@@ -304,8 +304,10 @@ class LibraryDatabase:
 
     def get_track_by_path(self, path: str) -> Optional[LibraryTrack]:
         """Get a track by its file path."""
+        # Normalize the path for consistent comparison
+        normalized_path = os.path.normpath(path)
         with self._cursor() as cur:
-            cur.execute("SELECT * FROM tracks WHERE path = ?", (path,))
+            cur.execute("SELECT * FROM tracks WHERE path = ?", (normalized_path,))
             row = cur.fetchone()
             return _row_to_track(row) if row else None
 
