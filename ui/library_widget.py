@@ -176,6 +176,7 @@ class LibraryDelegate(QtWidgets.QStyledItemDelegate):
 class LibraryWidget(QtWidgets.QWidget):
     trackActivated = QtCore.Signal(LibraryTrack)
     addFolderRequested = QtCore.Signal()
+    addFileRequested = QtCore.Signal()
 
     def __init__(self, library_service: LibraryService, parent=None):
         super().__init__(parent)
@@ -211,6 +212,14 @@ class LibraryWidget(QtWidgets.QWidget):
         self.search_bar.setFixedWidth(240)
         self.search_bar.textChanged.connect(self._on_search_changed)
         
+        # Add File Button
+        self.add_file_btn = QtWidgets.QToolButton()
+        self.add_file_btn.setText("Add File")
+        self.add_file_btn.setToolTip("Add file(s) to library")
+        self.add_file_btn.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.add_file_btn.clicked.connect(self.addFileRequested)
+        self.add_file_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+
         # Add Folder Button
         self.add_folder_btn = QtWidgets.QToolButton()
         self.add_folder_btn.setText("Add Folder")
@@ -236,6 +245,7 @@ class LibraryWidget(QtWidgets.QWidget):
         self.track_count_label.setObjectName("track_count_label")
 
         toolbar_layout.addWidget(self.search_bar)
+        toolbar_layout.addWidget(self.add_file_btn)
         toolbar_layout.addWidget(self.add_folder_btn)
         toolbar_layout.addWidget(self.refresh_btn)
         toolbar_layout.addWidget(self.clear_lib_btn)
@@ -300,6 +310,7 @@ class LibraryWidget(QtWidgets.QWidget):
     def _update_icons(self):
         # Update icons based on current palette/theme
         text_color = self.palette().color(QtGui.QPalette.ColorRole.Text)
+        self.add_file_btn.setIcon(render_svg_icon(SVG_ICON_TEMPLATES["file"], text_color, 16))
         self.add_folder_btn.setIcon(render_svg_icon(SVG_ICON_TEMPLATES["folder"], text_color, 16))
         self.refresh_btn.setIcon(render_svg_icon(SVG_ICON_TEMPLATES["refresh"], text_color, 16))
         self.clear_lib_btn.setIcon(render_svg_icon(SVG_ICON_TEMPLATES["trash"], text_color, 16))

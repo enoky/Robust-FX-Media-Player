@@ -442,6 +442,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
 
 
+        self.library_widget.addFileRequested.connect(self._add_files_dialog)
         self.library_widget.addFolderRequested.connect(self._add_folder_dialog)
         self.library_widget.trackActivated.connect(self._on_library_track_activated)
         
