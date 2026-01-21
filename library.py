@@ -323,6 +323,10 @@ class LibraryService:
         """Remove a track from the library."""
         self._db.remove_track(track_id)
 
+    def remove_tracks_by_artist(self, artist: str) -> None:
+        """Remove all tracks by an artist from the library."""
+        self._db.remove_tracks_by_artist(artist)
+
     def get_stats(self) -> dict:
         """Get library statistics."""
         return self._db.get_library_stats()

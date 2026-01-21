@@ -252,6 +252,8 @@ class LibraryWidget(QtWidgets.QWidget):
         self.sidebar.setIndentation(16)
         self.sidebar.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
         self.sidebar.itemClicked.connect(self._on_sidebar_click)
+        self.sidebar.setContextMenuPolicy(QtCore.Qt.ContextMenuPolicy.CustomContextMenu)
+        self.sidebar.customContextMenuRequested.connect(self._show_sidebar_context_menu)
         self.sidebar.setStyleSheet("QTreeWidget { background: transparent; }")
         
         sidebar_container = QtWidgets.QWidget()
@@ -506,4 +508,33 @@ class LibraryWidget(QtWidgets.QWidget):
 
         if confirm == QtWidgets.QMessageBox.StandardButton.Yes:
             self._library.clear_library()
+            self.refresh()
+
+    def _show_sidebar_context_menu(self, pos: QtCore.QPoint):
+        item = self.sidebar.itemAt(pos)
+        if not item:
+            return
+
+        data = item.data(0, QtCore.Qt.ItemDataRole.UserRole)
+        if not data or not data.startswith("artist:"):
+            return
+
+        artist = data.split(":", 1)[1]
+        
+        menu = QtWidgets.QMenu(self.sidebar)
+        remove_action = menu.addAction(f"Remove '{artist}'")
+        remove_action.triggered.connect(lambda: self._remove_artist(artist))
+        
+        menu.exec(self.sidebar.viewport().mapToGlobal(pos))
+
+    def _remove_artist(self, artist: str):
+        confirm = QtWidgets.QMessageBox.question(
+            self,
+            "Remove Artist",
+            f"Are you sure you want to remove '{artist}' from the library?\nAll tracks by this artist will be removed from the database.\nFiles on disk will NOT be deleted.",
+            QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No,
+        )
+
+        if confirm == QtWidgets.QMessageBox.StandardButton.Yes:
+            self._library.remove_tracks_by_artist(artist)
             self.refresh()

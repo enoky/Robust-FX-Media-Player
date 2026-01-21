@@ -291,6 +291,11 @@ class LibraryDatabase:
         with self._cursor() as cur:
             cur.execute("DELETE FROM tracks WHERE path = ?", (path,))
 
+    def remove_tracks_by_artist(self, artist: str) -> None:
+        """Remove all tracks by a specific artist."""
+        with self._cursor() as cur:
+            cur.execute("DELETE FROM tracks WHERE artist = ?", (artist,))
+
     # -------------------------------------------------------------------------
     # Query Operations
     # -------------------------------------------------------------------------
