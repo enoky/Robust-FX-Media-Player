@@ -68,6 +68,7 @@ Nine built-in color themes:
 
 - Windows 64-bit
 - Python 3.10+
+- Git for Windows/x64
 - FFmpeg installed and available on PATH
 - FFprobe available on PATH (recommended for duration and tags)
 - SoundTouch DLL (included) or other SoundTouch library
@@ -75,7 +76,7 @@ Nine built-in color themes:
 ### Python Packages
 
 ```bash
-pip install PySide6 numpy sounddevice scipy numba musicbrainzngs
+PySide6 numpy sounddevice scipy numba musicbrainzngs
 ```
 
 Verify FFmpeg:
@@ -86,6 +87,17 @@ ffprobe -version
 ```
 
 ---
+## Installation
+
+### 1. Run this command to clone repository (run in folder where you want to install)
+
+```bash
+git clone https://github.com/enoky/Robust-FX-Media-Player.git
+```
+
+### 2. Run `_venv_Installer.bat` to download required packages
+
+---
 
 ## Run
 
@@ -93,7 +105,7 @@ ffprobe -version
 
 Double-click:
 
-- `RUN_Player.bat`
+- `_RUN_Player.bat`
 
 ### Option B - From a terminal
 
