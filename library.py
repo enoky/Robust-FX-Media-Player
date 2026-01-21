@@ -102,6 +102,10 @@ class LibraryService:
             if self._scan_abort:
                 break
 
+            # Skip files already in the library
+            if self._db.get_track_by_path(path) is not None:
+                continue
+
             try:
                 track = self._create_track_from_path(path, metadata_extractor)
                 self._db.add_or_update_track(track)
@@ -142,6 +146,10 @@ class LibraryService:
                 break
 
             if not os.path.isfile(path) or not _is_media_file(path):
+                continue
+
+            # Skip files already in the library
+            if self._db.get_track_by_path(path) is not None:
                 continue
 
             try:
