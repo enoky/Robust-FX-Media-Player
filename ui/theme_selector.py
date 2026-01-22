@@ -153,8 +153,9 @@ class ThemeSelectorWidget(QtWidgets.QWidget):
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(20)
 
-        # Sort and group themes
+        # Sort and group themes by luminance
         light_themes = []
+        medium_themes = []
         dark_themes = []
         
         for name, theme in THEMES.items():
@@ -162,6 +163,8 @@ class ThemeSelectorWidget(QtWidgets.QWidget):
             lum = (0.299 * c.red() + 0.587 * c.green() + 0.114 * c.blue())
             if lum > 128:
                 light_themes.append(name)
+            elif lum > 65:
+                medium_themes.append(name)
             else:
                 dark_themes.append(name)
 
@@ -169,6 +172,11 @@ class ThemeSelectorWidget(QtWidgets.QWidget):
         if dark_themes:
             dark_section = self._create_section("Dark Themes", dark_themes)
             layout.addWidget(dark_section)
+
+        # Medium Themes Section
+        if medium_themes:
+            medium_section = self._create_section("Medium Themes", medium_themes)
+            layout.addWidget(medium_section)
 
         # Light Themes Section
         if light_themes:
