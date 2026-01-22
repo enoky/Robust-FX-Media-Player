@@ -148,6 +148,13 @@ SVG_ICON_TEMPLATES = {
             <line x1="7" y1="7" x2="7.01" y2="7"/>
         </svg>
     """,
+    "video": """
+        <svg viewBox="0 0 24 24" fill="none" stroke="{color}" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round">
+            <polygon points="23 7 16 12 23 17 23 7"/>
+            <rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>
+        </svg>
+    """,
 }
 
 

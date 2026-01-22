@@ -340,6 +340,24 @@ class LibraryDatabase:
             cur.execute(f"SELECT * FROM tracks ORDER BY {order_by} COLLATE NOCASE")
             return [_row_to_track(row) for row in cur.fetchall()]
 
+    def get_all_videos(self, extensions: Set[str]) -> List[LibraryTrack]:
+        """Get all video tracks based on extensions."""
+        if not extensions:
+            return []
+            
+        # Build query dynamically based on extensions
+        # simple suffix check using LIKE. 
+        # Note: path stores full path.
+        placeholders = " OR ".join(["path LIKE ?"] * len(extensions))
+        args = [f"%{ext}" for ext in extensions]
+        
+        with self._cursor() as cur:
+            cur.execute(
+                f"SELECT * FROM tracks WHERE {placeholders} ORDER BY title COLLATE NOCASE",
+                tuple(args)
+            )
+            return [_row_to_track(row) for row in cur.fetchall()]
+
     def get_tracks_by_artist(self, artist: str) -> List[LibraryTrack]:
         """Get all tracks by a specific artist."""
         with self._cursor() as cur:

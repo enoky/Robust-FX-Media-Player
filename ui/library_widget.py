@@ -326,6 +326,11 @@ class LibraryWidget(QtWidgets.QWidget):
         all_item = QtWidgets.QTreeWidgetItem(self.sidebar, ["All Tracks"])
         all_item.setIcon(0, render_svg_icon(SVG_ICON_TEMPLATES["list"], text_color, 16))
         all_item.setData(0, QtCore.Qt.ItemDataRole.UserRole, "all")
+
+        # All Videos item
+        videos_item = QtWidgets.QTreeWidgetItem(self.sidebar, ["All Videos"])
+        videos_item.setIcon(0, render_svg_icon(SVG_ICON_TEMPLATES["video"], text_color, 16))
+        videos_item.setData(0, QtCore.Qt.ItemDataRole.UserRole, "all_videos")
         
         # Artists
         artists_item = QtWidgets.QTreeWidgetItem(self.sidebar, ["Artists"])
@@ -427,6 +432,9 @@ class LibraryWidget(QtWidgets.QWidget):
         if data == "all":
             self._load_tracks(self._library.get_all_tracks())
             self._populate_albums(None) # Show all albums
+        elif data == "all_videos":
+            self._load_tracks(self._library.get_all_videos())
+            self._populate_albums(None) # Might want to filter albums to only those with videos later, but acceptable for now
         elif data.startswith("artist:"):
             artist = data.split(":", 1)[1]
             self._load_tracks(self._library.get_tracks_by_artist(artist))

@@ -13,6 +13,7 @@ from datetime import datetime
 from typing import Callable, Iterator, List, Optional, Set
 
 from library_db import LibraryDatabase, LibraryTrack
+from dsp import VIDEO_EXTS
 
 # Supported media file extensions
 MEDIA_EXTENSIONS: Set[str] = {
@@ -273,6 +274,10 @@ class LibraryService:
     def get_all_tracks(self, order_by: str = "title") -> List[LibraryTrack]:
         """Get all tracks ordered by specified column."""
         return self._db.get_all_tracks(order_by=order_by)
+
+    def get_all_videos(self) -> List[LibraryTrack]:
+        """Get all video tracks."""
+        return self._db.get_all_videos(VIDEO_EXTS)
 
     def search(self, query: str) -> List[LibraryTrack]:
         """Search tracks by title, artist, or album."""
