@@ -183,8 +183,8 @@ THEMES = {
         window="#f6f2e9",
         base="#fffaf1",
         text="#1f2933",
-        highlight="#f59e0b",
-        accent="#f97316",
+        highlight="#3b82f6",
+        accent="#2563eb",
         card="#f0e7d8",
     ),
     "Aurora": Theme(
