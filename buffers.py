@@ -222,3 +222,58 @@ class VideoFrameBuffer:
     def get_latest(self) -> tuple[Optional[QtGui.QImage], Optional[float]]:
         with self._lock:
             return self._image, self._timestamp
+
+
+class VideoRingBuffer:
+    """
+    Thread-safe ring buffer for decoded video frames with timestamps.
+    Frames are stored in timestamp order. Supports fetching the frame
+    closest to (but not after) a given target timestamp.
+    """
+
+    def __init__(self, max_frames: int = 30):
+        self._max_frames = max(1, int(max_frames))
+        self._frames: deque[tuple[float, QtGui.QImage]] = deque()
+        self._lock = threading.Lock()
+
+    def clear(self) -> None:
+        with self._lock:
+            self._frames.clear()
+
+    def push(self, timestamp: float, image: QtGui.QImage) -> None:
+        """Add a frame. Frames should be pushed in timestamp order."""
+        with self._lock:
+            self._frames.append((float(timestamp), image))
+            while len(self._frames) > self._max_frames:
+                self._frames.popleft()
+
+    def get_frame_for_time(self, target_time: float) -> tuple[Optional[QtGui.QImage], Optional[float]]:
+        """
+        Return the frame with the largest timestamp <= target_time.
+        Also discards frames that are too old (before the returned frame).
+        """
+        with self._lock:
+            if not self._frames:
+                return None, None
+
+            best_idx = -1
+            for i, (ts, _) in enumerate(self._frames):
+                if ts <= target_time:
+                    best_idx = i
+                else:
+                    break  # frames are in order, stop searching
+
+            if best_idx < 0:
+                # All frames are in the future; return None
+                return None, None
+
+            # Discard frames older than best_idx (already shown)
+            for _ in range(best_idx):
+                self._frames.popleft()
+
+            ts, img = self._frames[0]
+            return img, ts
+
+    def frames_buffered(self) -> int:
+        with self._lock:
+            return len(self._frames)

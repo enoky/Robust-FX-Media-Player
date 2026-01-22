@@ -22,7 +22,7 @@ except Exception as e:
     sd = None
     _sounddevice_import_error = e
 
-from buffers import AudioRingBuffer, VisualizerBuffer, VideoFrameBuffer
+from buffers import AudioRingBuffer, VisualizerBuffer, VideoFrameBuffer, VideoRingBuffer
 from config import (
     AUTO_BUFFER_PRESET,
     AUTO_BUFFER_THRESHOLD,
@@ -389,7 +389,8 @@ class DecoderThread(threading.Thread):
 
 class VideoDecoderThread(threading.Thread):
     """
-    Reads raw RGBA frames from ffmpeg and updates the latest frame buffer.
+    Decodes video frames from ffmpeg and pushes them into a ring buffer.
+    Sync is handled externally by a Qt timer.
     """
     def __init__(
         self,
@@ -398,10 +399,8 @@ class VideoDecoderThread(threading.Thread):
         fps: float,
         width: int,
         height: int,
-        frame_buffer: VideoFrameBuffer,
-        position_provider: Callable[[], float],
+        ring_buffer: VideoRingBuffer,
         state_cb,
-        frame_cb: Optional[Callable[[QtGui.QImage, float], None]] = None,
     ):
         super().__init__(daemon=True)
         self.track_path = track_path
@@ -409,13 +408,10 @@ class VideoDecoderThread(threading.Thread):
         self.fps = float(max(1e-3, fps))
         self.width = int(width)
         self.height = int(height)
-        self._frame_buffer = frame_buffer
-        self._position_provider = position_provider
+        self._ring_buffer = ring_buffer
         self._state_cb = state_cb
-        self._frame_cb = frame_cb
         self._stop = threading.Event()
         self._paused = threading.Event()
-        self._sync_reset = threading.Event()
         self._proc: Optional[subprocess.Popen] = None
         self._stderr_thread: Optional[threading.Thread] = None
         self._frame_bytes = max(0, self.width * self.height * 4)
@@ -438,8 +434,6 @@ class VideoDecoderThread(threading.Thread):
         else:
             self._paused.clear()
 
-    def reset_sync(self) -> None:
-        self._sync_reset.set()
 
     def _enqueue_timestamp(self, timestamp: float) -> None:
         with self._timestamp_cv:
@@ -515,57 +509,37 @@ class VideoDecoderThread(threading.Thread):
 
         frame_index = 0
         frame_duration = 1.0 / self.fps
-        last_image: Optional[QtGui.QImage] = None
-        last_timestamp: Optional[float] = None
-        pending_image: Optional[QtGui.QImage] = None
-        pending_timestamp: Optional[float] = None
-        next_frame_time: Optional[float] = None
 
         try:
             while not self._stop.is_set():
                 if self._paused.is_set():
                     time.sleep(0.02)
                     continue
-                if self._sync_reset.is_set():
-                    self._sync_reset.clear()
-                    pending_image = None
-                    pending_timestamp = None
-                    with self._timestamp_cv:
-                        self._timestamps.clear()
-                now = time.monotonic()
-                if next_frame_time is None:
-                    next_frame_time = now
 
-                if pending_image is None:
-                    data = self._read_frame(stdout)
-                    if data is None:
-                        break
-                    pending_image = QtGui.QImage(
-                        data,
-                        self.width,
-                        self.height,
-                        QtGui.QImage.Format.Format_RGBA8888,
-                    ).copy()
-                    timestamp = self._pop_timestamp(timeout=0.0)
-                    if timestamp is None:
-                        timestamp = frame_index * frame_duration
-                    pending_timestamp = self.start_sec + timestamp
-                    frame_index += 1
+                data = self._read_frame(stdout)
+                if data is None:
+                    break
 
-                if pending_image is not None and pending_timestamp is not None:
-                    self._frame_buffer.update(pending_image, pending_timestamp)
-                    if self._frame_cb is not None:
-                        self._frame_cb(pending_image, pending_timestamp)
-                    last_image = pending_image
-                    last_timestamp = pending_timestamp
-                pending_image = None
-                pending_timestamp = None
-                if next_frame_time is None:
-                    next_frame_time = time.monotonic()
-                next_frame_time += frame_duration
-                sleep_for = max(0.0, next_frame_time - time.monotonic())
-                if sleep_for:
-                    time.sleep(min(sleep_for, 0.05))
+                image = QtGui.QImage(
+                    data,
+                    self.width,
+                    self.height,
+                    QtGui.QImage.Format.Format_RGBA8888,
+                ).copy()
+                
+                timestamp = self._pop_timestamp(timeout=0.0)
+                if timestamp is None:
+                    timestamp = frame_index * frame_duration
+                frame_timestamp = self.start_sec + timestamp
+                frame_index += 1
+
+                # Push to ring buffer; sync handled by Qt timer externally
+                self._ring_buffer.push(frame_timestamp, image)
+
+                # Throttle decode if buffer is full (backpressure)
+                while self._ring_buffer.frames_buffered() >= 25 and not self._stop.is_set():
+                    time.sleep(0.01)
+
         except Exception as e:
             self._state_cb("error", f"Video decode error: {e}")
         finally:
@@ -634,7 +608,9 @@ class PlayerEngine(QtCore.QObject):
             max_seconds=self._buffer_preset.ring_max_seconds,
             sample_rate=sample_rate,
         )
-        self._video_buffer = VideoFrameBuffer()
+        self._video_ring_buffer = VideoRingBuffer(max_frames=30)
+        self._video_timer: Optional[QtCore.QTimer] = None
+        self._last_video_timestamp: Optional[float] = None
         self._dsp, self._dsp_name = make_dsp(sample_rate, channels)
         self._eq_dsp = EqualizerDSP(sample_rate, channels)
         self._compressor = CompressorEffect(sample_rate, channels, enabled=False)
@@ -813,7 +789,10 @@ class PlayerEngine(QtCore.QObject):
 
     def _video_position_provider(self) -> float:
         self.update_position_from_clock()
-        return self.get_position()
+        # Audio heard now is delayed by hardware output latency
+        pos = self.get_position()
+        latency = self.get_output_latency_seconds()
+        return max(0.0, pos - latency)
 
     def _start_video_decoder(self) -> None:
         if self.track is None or not self.track.has_video:
@@ -823,7 +802,8 @@ class PlayerEngine(QtCore.QObject):
             logger.warning("Video stream detected but dimensions are missing.")
             return
         self._stop_video_decoder()
-        self._video_buffer.clear()
+        self._video_ring_buffer.clear()
+        self._last_video_timestamp = None
 
         def state_cb(kind, msg):
             if kind == "error":
@@ -835,18 +815,36 @@ class PlayerEngine(QtCore.QObject):
             fps=self._video_fps,
             width=width,
             height=height,
-            frame_buffer=self._video_buffer,
-            position_provider=self._video_position_provider,
+            ring_buffer=self._video_ring_buffer,
             state_cb=state_cb,
-            frame_cb=self.videoFrameReady.emit,
         )
         self._video_decoder.start()
 
+        # Start Qt timer for frame presentation (~60fps)
+        self._video_timer = QtCore.QTimer(self)
+        self._video_timer.setInterval(16)  # ~60 fps
+        self._video_timer.timeout.connect(self._on_video_timer_tick)
+        self._video_timer.start()
+
+    def _on_video_timer_tick(self) -> None:
+        """Called by Qt timer to present the appropriate video frame."""
+        if not self._playing or self._paused:
+            return
+        audio_pos = self._video_position_provider()
+        image, timestamp = self._video_ring_buffer.get_frame_for_time(audio_pos)
+        if image is not None and timestamp != self._last_video_timestamp:
+            self._last_video_timestamp = timestamp
+            self.videoFrameReady.emit(image, timestamp)
+
     def _stop_video_decoder(self) -> None:
+        if self._video_timer:
+            self._video_timer.stop()
+            self._video_timer = None
         if self._video_decoder:
             self._video_decoder.stop()
             self._video_decoder = None
-        self._video_buffer.clear()
+        self._video_ring_buffer.clear()
+        self._last_video_timestamp = None
 
     def _update_audio_params(self, **changes) -> None:
         current = self._audio_params
