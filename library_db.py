@@ -62,6 +62,26 @@ class LibraryTrack:
         }
 
 
+@dataclass
+class Playlist:
+    """Represents a playlist stored in the media library database."""
+
+    id: Optional[int]
+    name: str
+    created_at: datetime
+    updated_at: datetime
+
+
+def _row_to_playlist(row: sqlite3.Row) -> Playlist:
+    """Convert a database row to a Playlist object."""
+    return Playlist(
+        id=row["id"],
+        name=row["name"],
+        created_at=_parse_datetime(row["created_at"]) or datetime.now(),
+        updated_at=_parse_datetime(row["updated_at"]) or datetime.now(),
+    )
+
+
 def _parse_datetime(value: Optional[str]) -> Optional[datetime]:
     """Parse ISO format datetime string."""
     if not value:
@@ -99,7 +119,7 @@ class LibraryDatabase:
     Thread-safe with connection pooling per thread.
     """
 
-    SCHEMA_VERSION = 1
+    SCHEMA_VERSION = 2
 
     def __init__(self, db_path: Optional[str] = None):
         """
@@ -185,11 +205,40 @@ class LibraryDatabase:
                     "CREATE INDEX IF NOT EXISTS idx_title ON tracks(title COLLATE NOCASE)"
                 )
 
-                cur.execute("DELETE FROM schema_version")
+            if current_version < 2:
+                # Add playlist tables
                 cur.execute(
-                    "INSERT INTO schema_version (version) VALUES (?)",
-                    (self.SCHEMA_VERSION,),
+                    """
+                    CREATE TABLE IF NOT EXISTS playlists (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        name TEXT NOT NULL UNIQUE,
+                        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+                    )
+                    """
                 )
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS playlist_tracks (
+                        playlist_id INTEGER NOT NULL,
+                        track_id INTEGER NOT NULL,
+                        position INTEGER NOT NULL,
+                        PRIMARY KEY (playlist_id, track_id),
+                        FOREIGN KEY (playlist_id) REFERENCES playlists(id) ON DELETE CASCADE,
+                        FOREIGN KEY (track_id) REFERENCES tracks(id) ON DELETE CASCADE
+                    )
+                    """
+                )
+                cur.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_playlist_tracks_playlist ON playlist_tracks(playlist_id)"
+                )
+
+            # Update schema version
+            cur.execute("DELETE FROM schema_version")
+            cur.execute(
+                "INSERT INTO schema_version (version) VALUES (?)",
+                (self.SCHEMA_VERSION,),
+            )
 
     # -------------------------------------------------------------------------
     # CRUD Operations
@@ -522,6 +571,163 @@ class LibraryDatabase:
                 "total_duration": row["total_duration"] or 0.0,
                 "total_size": row["total_size"] or 0,
             }
+
+    # -------------------------------------------------------------------------
+    # Playlist Operations
+    # -------------------------------------------------------------------------
+
+    def create_playlist(self, name: str) -> Playlist:
+        """
+        Create a new playlist.
+
+        Args:
+            name: Name of the playlist (must be unique).
+
+        Returns:
+            The created Playlist object.
+
+        Raises:
+            sqlite3.IntegrityError: If playlist name already exists.
+        """
+        now = datetime.now().isoformat()
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO playlists (name, created_at, updated_at)
+                VALUES (?, ?, ?)
+                """,
+                (name, now, now),
+            )
+            playlist_id = cur.lastrowid
+            return Playlist(
+                id=playlist_id,
+                name=name,
+                created_at=datetime.fromisoformat(now),
+                updated_at=datetime.fromisoformat(now),
+            )
+
+    def delete_playlist(self, playlist_id: int) -> None:
+        """Delete a playlist by ID. Cascade deletes playlist_tracks entries."""
+        with self._cursor() as cur:
+            cur.execute("DELETE FROM playlists WHERE id = ?", (playlist_id,))
+
+    def rename_playlist(self, playlist_id: int, new_name: str) -> None:
+        """Rename a playlist."""
+        now = datetime.now().isoformat()
+        with self._cursor() as cur:
+            cur.execute(
+                "UPDATE playlists SET name = ?, updated_at = ? WHERE id = ?",
+                (new_name, now, playlist_id),
+            )
+
+    def get_playlist_by_id(self, playlist_id: int) -> Optional[Playlist]:
+        """Get a playlist by its ID."""
+        with self._cursor() as cur:
+            cur.execute("SELECT * FROM playlists WHERE id = ?", (playlist_id,))
+            row = cur.fetchone()
+            return _row_to_playlist(row) if row else None
+
+    def get_all_playlists(self) -> List[Playlist]:
+        """Get all playlists ordered by name."""
+        with self._cursor() as cur:
+            cur.execute("SELECT * FROM playlists ORDER BY name COLLATE NOCASE")
+            return [_row_to_playlist(row) for row in cur.fetchall()]
+
+    def add_track_to_playlist(
+        self, playlist_id: int, track_id: int, position: Optional[int] = None
+    ) -> None:
+        """
+        Add a track to a playlist.
+
+        Args:
+            playlist_id: ID of the playlist.
+            track_id: ID of the track to add.
+            position: Optional position. If None, adds at the end.
+        """
+        with self._cursor() as cur:
+            if position is None:
+                # Find max position and add at end
+                cur.execute(
+                    "SELECT MAX(position) as max_pos FROM playlist_tracks WHERE playlist_id = ?",
+                    (playlist_id,),
+                )
+                row = cur.fetchone()
+                position = (row["max_pos"] or 0) + 1
+
+            cur.execute(
+                """
+                INSERT OR REPLACE INTO playlist_tracks (playlist_id, track_id, position)
+                VALUES (?, ?, ?)
+                """,
+                (playlist_id, track_id, position),
+            )
+            # Update playlist timestamp
+            cur.execute(
+                "UPDATE playlists SET updated_at = ? WHERE id = ?",
+                (datetime.now().isoformat(), playlist_id),
+            )
+
+    def remove_track_from_playlist(self, playlist_id: int, track_id: int) -> None:
+        """Remove a track from a playlist."""
+        with self._cursor() as cur:
+            cur.execute(
+                "DELETE FROM playlist_tracks WHERE playlist_id = ? AND track_id = ?",
+                (playlist_id, track_id),
+            )
+            # Update playlist timestamp
+            cur.execute(
+                "UPDATE playlists SET updated_at = ? WHERE id = ?",
+                (datetime.now().isoformat(), playlist_id),
+            )
+
+    def get_playlist_tracks(self, playlist_id: int) -> List[LibraryTrack]:
+        """Get all tracks in a playlist ordered by position."""
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                SELECT t.* FROM tracks t
+                JOIN playlist_tracks pt ON t.id = pt.track_id
+                WHERE pt.playlist_id = ?
+                ORDER BY pt.position
+                """,
+                (playlist_id,),
+            )
+            return [_row_to_track(row) for row in cur.fetchall()]
+
+    def reorder_playlist_tracks(self, playlist_id: int, track_ids: List[int]) -> None:
+        """
+        Reorder tracks in a playlist.
+
+        Args:
+            playlist_id: ID of the playlist.
+            track_ids: List of track IDs in the desired order.
+        """
+        with self._cursor() as cur:
+            for position, track_id in enumerate(track_ids, start=1):
+                cur.execute(
+                    """
+                    UPDATE playlist_tracks
+                    SET position = ?
+                    WHERE playlist_id = ? AND track_id = ?
+                    """,
+                    (position, playlist_id, track_id),
+                )
+            # Update playlist timestamp
+            cur.execute(
+                "UPDATE playlists SET updated_at = ? WHERE id = ?",
+                (datetime.now().isoformat(), playlist_id),
+            )
+
+    def clear_playlist(self, playlist_id: int) -> None:
+        """Remove all tracks from a playlist but keep the playlist itself."""
+        with self._cursor() as cur:
+            cur.execute(
+                "DELETE FROM playlist_tracks WHERE playlist_id = ?", (playlist_id,)
+            )
+            cur.execute(
+                "UPDATE playlists SET updated_at = ? WHERE id = ?",
+                (datetime.now().isoformat(), playlist_id),
+            )
 
     # -------------------------------------------------------------------------
     # Maintenance

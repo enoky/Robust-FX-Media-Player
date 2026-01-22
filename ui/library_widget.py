@@ -156,6 +156,83 @@ class LibraryTableModel(QtCore.QAbstractTableModel):
         self._tracks.sort(key=sort_key, reverse=reverse)
         self.layoutChanged.emit()
 
+    # -------------------------------------------------------------------------
+    # Drag and Drop support for playlist reordering
+    # -------------------------------------------------------------------------
+
+    def flags(self, index: QtCore.QModelIndex) -> QtCore.Qt.ItemFlag:
+        """Return item flags, enabling drag-and-drop when in playlist mode."""
+        default_flags = super().flags(index)
+        if index.isValid():
+            return default_flags | QtCore.Qt.ItemFlag.ItemIsDragEnabled | QtCore.Qt.ItemFlag.ItemIsDropEnabled
+        return default_flags | QtCore.Qt.ItemFlag.ItemIsDropEnabled
+
+    def supportedDropActions(self) -> QtCore.Qt.DropAction:
+        return QtCore.Qt.DropAction.MoveAction
+
+    def mimeTypes(self) -> List[str]:
+        return ["application/x-playlist-track-row"]
+
+    def mimeData(self, indexes: List[QtCore.QModelIndex]) -> QtCore.QMimeData:
+        """Encode row indices for drag operation."""
+        mime_data = QtCore.QMimeData()
+        rows = sorted(set(index.row() for index in indexes if index.isValid()))
+        mime_data.setData("application/x-playlist-track-row", ",".join(str(r) for r in rows).encode())
+        return mime_data
+
+    def dropMimeData(
+        self,
+        data: QtCore.QMimeData,
+        action: QtCore.Qt.DropAction,
+        row: int,
+        column: int,
+        parent: QtCore.QModelIndex,
+    ) -> bool:
+        """Handle drop to reorder tracks. Returns True if successful."""
+        if action == QtCore.Qt.DropAction.IgnoreAction:
+            return True
+        if not data.hasFormat("application/x-playlist-track-row"):
+            return False
+
+        # Decode source rows
+        raw = data.data("application/x-playlist-track-row").data().decode()
+        source_rows = [int(r) for r in raw.split(",") if r]
+        if not source_rows:
+            return False
+
+        # Determine target row
+        if row == -1:
+            if parent.isValid():
+                target_row = parent.row()
+            else:
+                target_row = len(self._tracks)
+        else:
+            target_row = row
+
+        # Perform reorder in-memory
+        self.layoutAboutToBeChanged.emit()
+        
+        # Extract tracks to move
+        tracks_to_move = [self._tracks[r] for r in sorted(source_rows, reverse=True)]
+        for r in sorted(source_rows, reverse=True):
+            del self._tracks[r]
+        
+        # Adjust target if needed (rows above target were removed)
+        for r in source_rows:
+            if r < target_row:
+                target_row -= 1
+        
+        # Insert at target
+        for i, track in enumerate(reversed(tracks_to_move)):
+            self._tracks.insert(target_row, track)
+        
+        self.layoutChanged.emit()
+        return True
+
+    def get_track_ids_in_order(self) -> List[int]:
+        """Return current track IDs in display order for saving to DB."""
+        return [t.id for t in self._tracks if t.id is not None]
+
 
 class LibraryDelegate(QtWidgets.QStyledItemDelegate):
     """
@@ -277,7 +354,7 @@ class LibraryWidget(QtWidgets.QWidget):
         self.table = QtWidgets.QTableView()
         self.table.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
         self.table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows)
-        self.table.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.SingleSelection)
+        self.table.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.ExtendedSelection)
         self.table.setSortingEnabled(True)
         self.table.alternatingRowColors()
         self.table.setShowGrid(False)
@@ -331,6 +408,12 @@ class LibraryWidget(QtWidgets.QWidget):
         videos_item = QtWidgets.QTreeWidgetItem(self.sidebar, ["All Videos"])
         videos_item.setIcon(0, render_svg_icon(SVG_ICON_TEMPLATES["video"], text_color, 16))
         videos_item.setData(0, QtCore.Qt.ItemDataRole.UserRole, "all_videos")
+
+        # Playlists (right after All Videos for quick access)
+        self.playlists_item = QtWidgets.QTreeWidgetItem(self.sidebar, ["Playlists"])
+        self.playlists_item.setIcon(0, render_svg_icon(SVG_ICON_TEMPLATES["list"], text_color, 16))
+        self.playlists_item.setData(0, QtCore.Qt.ItemDataRole.UserRole, "playlists_header")
+        self._populate_playlists()
         
         # Artists
         artists_item = QtWidgets.QTreeWidgetItem(self.sidebar, ["Artists"])
@@ -356,6 +439,7 @@ class LibraryWidget(QtWidgets.QWidget):
             item.setData(0, QtCore.Qt.ItemDataRole.UserRole, f"genre:{genre}")
 
         # Expand items
+        self.sidebar.expandItem(self.playlists_item)
         self.sidebar.expandItem(artists_item)
         self.sidebar.expandItem(self.albums_item)
         self.sidebar.expandItem(genres_item)
@@ -391,7 +475,29 @@ class LibraryWidget(QtWidgets.QWidget):
             safe_val = f"{album}|{artist}" if artist else album
             item.setData(0, QtCore.Qt.ItemDataRole.UserRole, f"album:{safe_val}")
 
+    def _populate_playlists(self):
+        """Populate the Playlists tree item."""
+        if not hasattr(self, 'playlists_item'):
+            return
+            
+        # Clear existing children
+        self.playlists_item.takeChildren()
+        
+        playlists = self._library.get_playlists()
+        for playlist in playlists:
+            item = QtWidgets.QTreeWidgetItem(self.playlists_item, [playlist.name])
+            item.setData(0, QtCore.Qt.ItemDataRole.UserRole, f"playlist:{playlist.id}")
+
     def _load_tracks(self, tracks: List[LibraryTrack]):
+        # Reset playlist mode
+        self._current_playlist_id = None
+        
+        # Disable drag-and-drop for non-playlist views
+        self.table.setDragEnabled(False)
+        self.table.setAcceptDrops(False)
+        self.table.setDragDropMode(QtWidgets.QAbstractItemView.DragDropMode.NoDragDrop)
+        self.table.setSortingEnabled(True)
+        
         # consistently sort tracks by Artist -> Album -> Track Number -> Title
         # regardless of how they were retrieved (All, Artist, Search)
         def sort_key(t: LibraryTrack):
@@ -453,13 +559,40 @@ class LibraryWidget(QtWidgets.QWidget):
         elif data.startswith("genre:"):
             genre = data.split(":", 1)[1]
             self._load_tracks(self._library.get_tracks_by_genre(genre))
-            # Maybe reset albums logic here or keep it as is? 
-            # User request: "only show all albums when All Tracks is selected" 
-            # implies logic should reset on All Tracks, but is vague on Genre.
-            # Assuming Genre selection shouldn't filter Albums list strictly (or it's complex).
-            # Let's default to showing ALL albums if they switch to Genre, 
-            # unless they specifically wanted to filter albums by genre too (out of scope).
             self._populate_albums(None)
+        elif data.startswith("playlist:"):
+            playlist_id = int(data.split(":", 1)[1])
+            self._current_playlist_id = playlist_id
+            # Don't sort playlist tracks - preserve playlist order
+            tracks = self._library.get_playlist_tracks(playlist_id)
+            self._model = LibraryTableModel(tracks, self)
+            self.table.setModel(self._model)
+            self.table.resizeColumnsToContents()
+            self.table.setColumnWidth(0, 40)
+            self.table.setColumnWidth(1, 240)
+            self.table.setColumnWidth(2, 200)
+            self.table.setColumnWidth(3, 200)
+            self.track_count_label.setText(f"{len(tracks)} tracks")
+            if self._current_track_path:
+                self._model.set_current_path(self._current_track_path)
+            # Enable drag-and-drop for playlist reordering
+            self.table.setDragEnabled(True)
+            self.table.setAcceptDrops(True)
+            self.table.setDropIndicatorShown(True)
+            self.table.setDragDropMode(QtWidgets.QAbstractItemView.DragDropMode.InternalMove)
+            self.table.setSortingEnabled(False)  # Disable sorting to preserve custom order
+            # Connect layoutChanged to save reorder
+            self._model.layoutChanged.connect(self._on_playlist_reordered)
+        elif data == "playlists_header":
+            # Clicking on the header does nothing special, just ensure expanded
+            self.sidebar.expandItem(self.playlists_item)
+        else:
+            self._current_playlist_id = None
+            # Disable drag-and-drop when not in playlist mode
+            self.table.setDragEnabled(False)
+            self.table.setAcceptDrops(False)
+            self.table.setDragDropMode(QtWidgets.QAbstractItemView.DragDropMode.NoDragDrop)
+            self.table.setSortingEnabled(True)
 
     def _on_table_double_click(self, index: QtCore.QModelIndex):
         track = self._model.data(index, QtCore.Qt.ItemDataRole.UserRole)
@@ -470,23 +603,64 @@ class LibraryWidget(QtWidgets.QWidget):
         index = self.table.indexAt(pos)
         if not index.isValid():
             return
-            
-        track = self._model.data(index, QtCore.Qt.ItemDataRole.UserRole)
-        if not track:
+        
+        # Get all selected tracks
+        selected_indexes = self.table.selectionModel().selectedRows()
+        selected_tracks = []
+        for idx in selected_indexes:
+            track = self._model.data(idx, QtCore.Qt.ItemDataRole.UserRole)
+            if track:
+                selected_tracks.append(track)
+        
+        if not selected_tracks:
             return
+        
+        # Use first track for single-track operations
+        first_track = selected_tracks[0]
+        is_multi = len(selected_tracks) > 1
 
         menu = QtWidgets.QMenu(self)
         
         play_action = menu.addAction("Play")
-        play_action.triggered.connect(lambda: self.trackActivated.emit(track))
+        play_action.triggered.connect(lambda: self.trackActivated.emit(first_track))
         
-        show_action = menu.addAction("Show in Explorer")
-        show_action.triggered.connect(lambda: self._show_in_explorer(track.path))
+        if not is_multi:
+            show_action = menu.addAction("Show in Explorer")
+            show_action.triggered.connect(lambda: self._show_in_explorer(first_track.path))
         
         menu.addSeparator()
         
-        remove_action = menu.addAction("Remove from Library")
-        remove_action.triggered.connect(lambda: self._remove_track(track))
+        # Add to Playlist submenu
+        playlists = self._library.get_playlists()
+        if playlists or True:  # Always show submenu
+            label = f"Add {len(selected_tracks)} Tracks to Playlist" if is_multi else "Add to Playlist"
+            playlist_menu = menu.addMenu(label)
+            
+            # New Playlist option
+            new_playlist_action = playlist_menu.addAction("New Playlist...")
+            new_playlist_action.triggered.connect(lambda: self._add_tracks_to_new_playlist(selected_tracks))
+            
+            if playlists:
+                playlist_menu.addSeparator()
+                for playlist in playlists:
+                    action = playlist_menu.addAction(playlist.name)
+                    action.triggered.connect(
+                        lambda checked, pl_id=playlist.id, tracks=selected_tracks: self._add_tracks_to_playlist(pl_id, tracks)
+                    )
+        
+        # Remove from Playlist (if viewing a playlist)
+        if hasattr(self, '_current_playlist_id') and self._current_playlist_id:
+            label = f"Remove {len(selected_tracks)} from Playlist" if is_multi else "Remove from Playlist"
+            remove_from_pl_action = menu.addAction(label)
+            remove_from_pl_action.triggered.connect(
+                lambda: self._remove_tracks_from_playlist(self._current_playlist_id, selected_tracks)
+            )
+        
+        menu.addSeparator()
+        
+        label = f"Remove {len(selected_tracks)} from Library" if is_multi else "Remove from Library"
+        remove_action = menu.addAction(label)
+        remove_action.triggered.connect(lambda: self._remove_tracks(selected_tracks))
         
         menu.exec(self.table.viewport().mapToGlobal(pos))
 
@@ -535,16 +709,43 @@ class LibraryWidget(QtWidgets.QWidget):
             return
 
         data = item.data(0, QtCore.Qt.ItemDataRole.UserRole)
-        if not data or not data.startswith("artist:"):
+        if not data:
             return
 
-        artist = data.split(":", 1)[1]
-        
         menu = QtWidgets.QMenu(self.sidebar)
-        remove_action = menu.addAction(f"Remove '{artist}'")
-        remove_action.triggered.connect(lambda: self._remove_artist(artist))
-        
-        menu.exec(self.sidebar.viewport().mapToGlobal(pos))
+
+        # Handle artist context menu
+        if data.startswith("artist:"):
+            artist = data.split(":", 1)[1]
+            remove_action = menu.addAction(f"Remove '{artist}'")
+            remove_action.triggered.connect(lambda: self._remove_artist(artist))
+            menu.exec(self.sidebar.viewport().mapToGlobal(pos))
+            return
+
+        # Handle playlists header context menu
+        if data == "playlists_header":
+            new_action = menu.addAction("New Playlist...")
+            new_action.triggered.connect(self._create_new_playlist)
+            menu.exec(self.sidebar.viewport().mapToGlobal(pos))
+            return
+
+        # Handle individual playlist context menu
+        if data.startswith("playlist:"):
+            playlist_id = int(data.split(":", 1)[1])
+            playlist = self._library.get_playlist(playlist_id)
+            if playlist:
+                rename_action = menu.addAction(f"Rename '{playlist.name}'")
+                rename_action.triggered.connect(lambda: self._rename_playlist(playlist_id, playlist.name))
+                
+                clear_action = menu.addAction("Clear Playlist")
+                clear_action.triggered.connect(lambda: self._clear_playlist(playlist_id, playlist.name))
+                
+                menu.addSeparator()
+                
+                delete_action = menu.addAction(f"Delete '{playlist.name}'")
+                delete_action.triggered.connect(lambda: self._delete_playlist(playlist_id, playlist.name))
+                
+            menu.exec(self.sidebar.viewport().mapToGlobal(pos))
 
     def _remove_artist(self, artist: str):
         confirm = QtWidgets.QMessageBox.question(
@@ -557,3 +758,164 @@ class LibraryWidget(QtWidgets.QWidget):
         if confirm == QtWidgets.QMessageBox.StandardButton.Yes:
             self._library.remove_tracks_by_artist(artist)
             self.refresh()
+
+    # -------------------------------------------------------------------------
+    # Playlist Management
+    # -------------------------------------------------------------------------
+
+    def _create_new_playlist(self):
+        """Create a new playlist via dialog."""
+        name, ok = QtWidgets.QInputDialog.getText(
+            self, "New Playlist", "Playlist name:"
+        )
+        if ok and name.strip():
+            try:
+                self._library.create_playlist(name.strip())
+                self._populate_playlists()
+                self.sidebar.expandItem(self.playlists_item)
+            except Exception as e:
+                QtWidgets.QMessageBox.warning(
+                    self, "Error", f"Could not create playlist: {e}"
+                )
+
+    def _rename_playlist(self, playlist_id: int, current_name: str):
+        """Rename a playlist via dialog."""
+        new_name, ok = QtWidgets.QInputDialog.getText(
+            self, "Rename Playlist", "New name:", text=current_name
+        )
+        if ok and new_name.strip() and new_name.strip() != current_name:
+            try:
+                self._library.rename_playlist(playlist_id, new_name.strip())
+                self._populate_playlists()
+            except Exception as e:
+                QtWidgets.QMessageBox.warning(
+                    self, "Error", f"Could not rename playlist: {e}"
+                )
+
+    def _delete_playlist(self, playlist_id: int, name: str):
+        """Delete a playlist after confirmation."""
+        confirm = QtWidgets.QMessageBox.question(
+            self,
+            "Delete Playlist",
+            f"Are you sure you want to delete the playlist '{name}'?\nTracks will remain in the library.",
+            QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No,
+        )
+        if confirm == QtWidgets.QMessageBox.StandardButton.Yes:
+            self._library.delete_playlist(playlist_id)
+            self._populate_playlists()
+            # If we were viewing this playlist, reload all tracks
+            if hasattr(self, '_current_playlist_id') and self._current_playlist_id == playlist_id:
+                self._current_playlist_id = None
+                self._load_tracks(self._library.get_all_tracks())
+
+    def _clear_playlist(self, playlist_id: int, name: str):
+        """Clear all tracks from a playlist after confirmation."""
+        confirm = QtWidgets.QMessageBox.question(
+            self,
+            "Clear Playlist",
+            f"Are you sure you want to remove all tracks from '{name}'?\nThe playlist itself will remain.",
+            QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No,
+        )
+        if confirm == QtWidgets.QMessageBox.StandardButton.Yes:
+            self._library.clear_playlist(playlist_id)
+            # If viewing this playlist, refresh the view
+            if hasattr(self, '_current_playlist_id') and self._current_playlist_id == playlist_id:
+                tracks = self._library.get_playlist_tracks(playlist_id)
+                self._model.update_tracks(tracks)
+                self.track_count_label.setText(f"{len(tracks)} tracks")
+
+    def _add_track_to_playlist(self, playlist_id: int, track: LibraryTrack):
+        """Add a track to an existing playlist."""
+        if track and track.id:
+            self._library.add_to_playlist(playlist_id, track.id)
+
+    def _add_track_to_new_playlist(self, track: LibraryTrack):
+        """Create a new playlist and add a track to it."""
+        name, ok = QtWidgets.QInputDialog.getText(
+            self, "New Playlist", "Playlist name:"
+        )
+        if ok and name.strip() and track and track.id:
+            try:
+                playlist = self._library.create_playlist(name.strip())
+                self._library.add_to_playlist(playlist.id, track.id)
+                self._populate_playlists()
+                self.sidebar.expandItem(self.playlists_item)
+            except Exception as e:
+                QtWidgets.QMessageBox.warning(
+                    self, "Error", f"Could not create playlist: {e}"
+                )
+
+    def _remove_track_from_playlist(self, playlist_id: int, track: LibraryTrack):
+        """Remove a track from the current playlist."""
+        if track and track.id:
+            self._library.remove_from_playlist(playlist_id, track.id)
+            # Refresh the playlist view
+            tracks = self._library.get_playlist_tracks(playlist_id)
+            self._model.update_tracks(tracks)
+            self.track_count_label.setText(f"{len(tracks)} tracks")
+
+    # -------------------------------------------------------------------------
+    # Multi-track operations
+    # -------------------------------------------------------------------------
+
+    def _add_tracks_to_playlist(self, playlist_id: int, tracks: List[LibraryTrack]):
+        """Add multiple tracks to an existing playlist."""
+        for track in tracks:
+            if track and track.id:
+                self._library.add_to_playlist(playlist_id, track.id)
+
+    def _add_tracks_to_new_playlist(self, tracks: List[LibraryTrack]):
+        """Create a new playlist and add multiple tracks to it."""
+        name, ok = QtWidgets.QInputDialog.getText(
+            self, "New Playlist", "Playlist name:"
+        )
+        if ok and name.strip():
+            try:
+                playlist = self._library.create_playlist(name.strip())
+                for track in tracks:
+                    if track and track.id:
+                        self._library.add_to_playlist(playlist.id, track.id)
+                self._populate_playlists()
+                self.sidebar.expandItem(self.playlists_item)
+            except Exception as e:
+                QtWidgets.QMessageBox.warning(
+                    self, "Error", f"Could not create playlist: {e}"
+                )
+
+    def _remove_tracks_from_playlist(self, playlist_id: int, tracks: List[LibraryTrack]):
+        """Remove multiple tracks from the current playlist."""
+        for track in tracks:
+            if track and track.id:
+                self._library.remove_from_playlist(playlist_id, track.id)
+        # Refresh the playlist view
+        remaining_tracks = self._library.get_playlist_tracks(playlist_id)
+        self._model.update_tracks(remaining_tracks)
+        self.track_count_label.setText(f"{len(remaining_tracks)} tracks")
+
+    def _remove_tracks(self, tracks: List[LibraryTrack]):
+        """Remove multiple tracks from the library."""
+        count = len(tracks)
+        confirm = QtWidgets.QMessageBox.question(
+            self,
+            "Remove Tracks",
+            f"Are you sure you want to remove {count} track(s) from the library?\nThe files will NOT be deleted.",
+            QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No,
+        )
+        
+        if confirm == QtWidgets.QMessageBox.StandardButton.Yes:
+            for track in tracks:
+                if track and track.id:
+                    self._library.remove_track(track.id)
+            self.refresh()
+
+    def _on_playlist_reordered(self):
+        """Save the new track order after drag-and-drop reordering."""
+        if not hasattr(self, '_current_playlist_id') or not self._current_playlist_id:
+            return
+        if not hasattr(self, '_model') or not self._model:
+            return
+        
+        # Get the new order of track IDs from the model
+        track_ids = self._model.get_track_ids_in_order()
+        if track_ids:
+            self._library.db.reorder_playlist_tracks(self._current_playlist_id, track_ids)

@@ -143,10 +143,22 @@ def build_stylesheet(theme: Theme) -> str:
             background: {theme.base};
             color: {theme.text};
             border: 1px solid {border};
+            padding: 4px;
+            border-radius: 6px;
+        }}
+        QMenu::item {{
+            padding: 6px 24px 6px 12px;
+            border-radius: 4px;
+            margin: 2px;
         }}
         QMenu::item:selected {{
             background: {theme.highlight};
             color: #0b0b0b;
+        }}
+        QMenu::separator {{
+            height: 1px;
+            background: {border};
+            margin: 4px 8px;
         }}
     """)
 

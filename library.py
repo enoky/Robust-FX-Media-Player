@@ -12,7 +12,7 @@ import os
 from datetime import datetime
 from typing import Callable, Iterator, List, Optional, Set
 
-from library_db import LibraryDatabase, LibraryTrack
+from library_db import LibraryDatabase, LibraryTrack, Playlist
 from dsp import VIDEO_EXTS
 
 # Supported media file extensions
@@ -339,6 +339,46 @@ class LibraryService:
     def clear_library(self) -> None:
         """Clear all tracks from the library."""
         self._db.clear_library()
+
+    # -------------------------------------------------------------------------
+    # Playlist Operations
+    # -------------------------------------------------------------------------
+
+    def create_playlist(self, name: str) -> Playlist:
+        """Create a new playlist."""
+        return self._db.create_playlist(name)
+
+    def delete_playlist(self, playlist_id: int) -> None:
+        """Delete a playlist."""
+        self._db.delete_playlist(playlist_id)
+
+    def rename_playlist(self, playlist_id: int, new_name: str) -> None:
+        """Rename a playlist."""
+        self._db.rename_playlist(playlist_id, new_name)
+
+    def get_playlists(self) -> List[Playlist]:
+        """Get all playlists."""
+        return self._db.get_all_playlists()
+
+    def get_playlist(self, playlist_id: int) -> Optional[Playlist]:
+        """Get a playlist by ID."""
+        return self._db.get_playlist_by_id(playlist_id)
+
+    def get_playlist_tracks(self, playlist_id: int) -> List[LibraryTrack]:
+        """Get all tracks in a playlist."""
+        return self._db.get_playlist_tracks(playlist_id)
+
+    def add_to_playlist(self, playlist_id: int, track_id: int) -> None:
+        """Add a track to a playlist."""
+        self._db.add_track_to_playlist(playlist_id, track_id)
+
+    def remove_from_playlist(self, playlist_id: int, track_id: int) -> None:
+        """Remove a track from a playlist."""
+        self._db.remove_track_from_playlist(playlist_id, track_id)
+
+    def clear_playlist(self, playlist_id: int) -> None:
+        """Clear all tracks from a playlist."""
+        self._db.clear_playlist(playlist_id)
 
     def close(self) -> None:
         """Close the library service and database connection."""
