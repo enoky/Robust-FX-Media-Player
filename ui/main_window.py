@@ -21,7 +21,7 @@ from ui.widgets import (
     VideoWidget,
     VideoPopoutDialog,
     TempoPitchWidget,
-    EqualizerWidget,
+    EqualizerWidget, # Duplicate import
     ReverbWidget,
     ChorusWidget,
     StereoWidthWidget,
@@ -32,11 +32,10 @@ from ui.widgets import (
     SubharmonicWidget,
     LimiterWidget,
     TransportWidget,
-    LimiterWidget,
-    TransportWidget,
     # PlaylistWidget,  <-- Removed
 )
 from ui.library_widget import LibraryWidget
+from ui.audio_device_dialog import AudioDeviceSelectionDialog
 from library import LibraryService
 from library_db import LibraryTrack
 
@@ -317,6 +316,17 @@ class MainWindow(QtWidgets.QMainWindow):
             buffer_preset_menu.addAction(action)
             self._buffer_preset_actions[preset_name] = action
             action.triggered.connect(lambda checked, p=preset_name: self._on_buffer_preset_changed(p) if checked else None)
+
+            action.triggered.connect(lambda checked, p=preset_name: self._on_buffer_preset_changed(p) if checked else None)
+
+        # Output Device Action
+        self.output_device_action = QtGui.QAction("Output Device...", self)
+        self.output_device_action.setToolTip("Select audio output device.")
+        self.output_device_action.triggered.connect(self._on_choose_device)
+        audio_menu.addAction(self.output_device_action)
+        
+        # Restore last device
+        self._restore_audio_device()
 
         audio_menu.addSeparator()
         self.metrics_action = QtGui.QAction("Enable Metrics Logging", self, checkable=True)
@@ -1576,3 +1586,112 @@ class MainWindow(QtWidgets.QMainWindow):
         event.accept()
 
 
+    def _on_subharmonic_controls_changed(self, mix: float, intensity: float, cutoff_hz: float):
+        self.settings.setValue("subharmonic/mix", float(mix))
+        self.settings.setValue("subharmonic/intensity", float(intensity))
+        self.settings.setValue("subharmonic/cutoff", float(cutoff_hz))
+
+    def _on_limiter_controls_changed(self, threshold: float, release_ms: Optional[float]):
+        self.settings.setValue("limiter/threshold", float(threshold))
+        if release_ms is not None:
+             self.settings.setValue("limiter/release", float(release_ms))
+
+    def _on_reverb_controls_changed(self, decay: float, predelay: float, wet: float):
+        self.settings.setValue("reverb/decay", float(decay))
+        self.settings.setValue("reverb/predelay", float(predelay))
+        self.settings.setValue("reverb/wet", float(wet))
+
+    def _on_chorus_controls_changed(self, rate: float, depth: float, mix: float):
+        self.settings.setValue("chorus/rate", float(rate))
+        self.settings.setValue("chorus/depth", float(depth))
+        self.settings.setValue("chorus/mix", float(mix))
+
+    def _on_stereo_panner_changed(self, azimuth: float, spread: float):
+        self.settings.setValue("stereo_panner/azimuth", float(azimuth))
+        self.settings.setValue("stereo_panner/spread", float(spread))
+
+    def _on_stereo_width_changed(self, width: float):
+        self.settings.setValue("stereo_width/width", float(width))
+
+    def _on_effect_auto_enabled(self, name: str):
+        if name in self.effect_toggles:
+            self.effect_toggles[name].setChecked(True)
+
+    def _on_error(self, msg: str):
+        self.status.setText(f"Error: {msg}")
+        QtWidgets.QMessageBox.warning(self, "Error", msg)
+
+    def _update_enabled_fx_label(self):
+        enabled = [name for name, cb in self.effect_toggles.items() if cb.isChecked()]
+        if not enabled:
+            self.fx_status.setText("Enabled FX: None")
+        else:
+            self.fx_status.setText(f"Enabled FX: {', '.join(enabled)}")
+
+    def _on_effect_toggled(self, name: str, enabled: bool):
+        self.settings.setValue(f"fx/{name}", bool(enabled))
+        self._update_enabled_fx_label()
+        
+        # Dispatch to engine
+        if name == "Compressor":
+            self.engine.set_compressor_enabled(enabled)
+        elif name == "Dynamic EQ":
+            self.engine.set_dynamic_eq_enabled(enabled)
+        elif name == "Saturation":
+            self.engine.set_saturation_enabled(enabled)
+        elif name == "Subharmonic":
+            self.engine.set_subharmonic_enabled(enabled)
+        elif name == "Reverb":
+            self.engine.set_reverb_enabled(enabled)
+        elif name == "Chorus":
+            self.engine.set_chorus_enabled(enabled)
+        elif name == "Stereo Panner":
+            self.engine.set_stereo_panner_enabled(enabled)
+        elif name == "Stereo Width":
+            self.engine.set_stereo_width_enabled(enabled)
+        elif name == "Limiter":
+            self.engine.set_limiter_enabled(enabled)
+
+    def _restore_audio_device(self):
+        # Try to restore last used device
+        last_device_name = self.settings.value("audio/output_device", "Default")
+        
+        if last_device_name == "Default":
+             self.engine.set_output_device(None)
+             return
+
+        devices = self.engine.get_output_devices()
+        # devices is list of dicts {index, name, hostapi, channels}
+        
+        found = False
+        for dev in devices:
+            if dev['name'] == last_device_name:
+                self.engine.set_output_device(dev['index'])
+                found = True
+                break
+        
+        if not found:
+            self.engine.set_output_device(None) # Fallback
+
+    def _on_choose_device(self):
+        devices = self.engine.get_output_devices()
+        
+        # Find current index
+        current_index = self.engine._output_device_index 
+        # Using internal property since I didn't add a getter method yet, 
+        # but I should ideally add one. For now this works.
+        
+        dialog = AudioDeviceSelectionDialog(devices, current_index, self)
+        if dialog.exec() == QtWidgets.QDialog.DialogCode.Accepted:
+            new_index = dialog.selected_device_index
+            
+            # Find name for storage
+            name = "Default"
+            if new_index is not None:
+                for dev in devices:
+                    if dev['index'] == new_index:
+                        name = dev['name']
+                        break
+            
+            self.settings.setValue("audio/output_device", name)
+            self.engine.set_output_device(new_index)

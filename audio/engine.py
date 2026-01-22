@@ -646,6 +646,7 @@ class PlayerEngine(QtCore.QObject):
         self._video_fps = 30.0
 
         self._stream: Optional[sd.OutputStream] = None if sd else None
+        self._output_device_index: Optional[int] = None
         self._volume = 0.8
         self._muted = False
 
@@ -748,6 +749,61 @@ class PlayerEngine(QtCore.QObject):
 
     def buffer_preset_name(self) -> str:
         return self._buffer_preset_name
+
+    def get_output_devices(self) -> list[dict]:
+        """Returns a list of device info dicts: {index, name, hostapi, channels}."""
+        if sd is None:
+            return []
+        devices = []
+        try:
+            device_list = sd.query_devices()
+            hostapis = sd.query_hostapis()
+            
+            for i, dev in enumerate(device_list):
+                if dev['max_output_channels'] > 0:
+                    api_index = dev['hostapi']
+                    api_name = "Unknown"
+                    if 0 <= api_index < len(hostapis):
+                         api_name = hostapis[api_index]['name']
+                    
+                    devices.append({
+                        "index": i,
+                        "name": dev['name'],
+                        "hostapi": api_name,
+                        "channels": dev['max_output_channels']
+                    })
+        except Exception:
+            pass
+        return devices
+
+    def set_output_device(self, index: Optional[int]) -> None:
+        """Sets the output device index. Pass None for system default."""
+        if self._output_device_index == index:
+            return
+        self._output_device_index = index
+        # Restart stream if active
+        if self._stream is not None:
+             # If strictly playing, we might want to seamlessly restart.
+             # But _ensure_stream logic is simple; simplest is to close and let main loop or play re-open.
+             # Actually, if we just set _stream to None/close it, we need to re-open it.
+             # The decoder thread doesn't manage the stream, the engine main thread (Qt) mostly does via _ensure_stream implicitly?
+             # No, _ensure_stream is called in `play` and `_state_cb`.
+             # If we are playing, we can just close current stream and open new one immediately.
+             
+             # Safest implementation:
+             active = self.state == PlayerState.PLAYING
+             self._close_stream()
+             if active:
+                 self._ensure_stream()
+    
+    def _close_stream(self):
+        if self._stream:
+            try:
+                self._stream.stop()
+                self._stream.close()
+            except Exception:
+                pass
+            self._stream = None
 
     def _restart_audio_for_buffer_preset(self) -> None:
         if self.track is None:
@@ -1148,11 +1204,7 @@ class PlayerEngine(QtCore.QObject):
         self._stop_video_decoder()
 
         if self._stream:
-            try:
-                self._stream.stop()
-                self._stream.close()
-            except Exception:
-                pass
+            self._close_stream()
             self._stream = None
 
         self._sync_position()
@@ -1241,6 +1293,7 @@ class PlayerEngine(QtCore.QObject):
                 dtype="float32",
                 blocksize=self._blocksize_frames,
                 latency=self._latency,
+                device=self._output_device_index,
                 callback=callback
             )
             self._stream.start()
