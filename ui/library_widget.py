@@ -254,7 +254,6 @@ class LibraryWidget(QtWidgets.QWidget):
     trackActivated = QtCore.Signal(LibraryTrack)
     addFolderRequested = QtCore.Signal()
     addFileRequested = QtCore.Signal()
-    modelLayoutChanged = QtCore.Signal()
 
     def __init__(self, library_service: LibraryService, parent=None):
         super().__init__(parent)
@@ -511,10 +510,8 @@ class LibraryWidget(QtWidgets.QWidget):
 
         tracks.sort(key=sort_key)
         self._model = LibraryTableModel(tracks, self)
-        self._model.layoutChanged.connect(self.modelLayoutChanged.emit)
         self.table.setModel(self._model)
         self.table.resizeColumnsToContents()
-        self.modelLayoutChanged.emit()
         
         # Adjust column widths
         self.table.setColumnWidth(0, 40) # Track Number

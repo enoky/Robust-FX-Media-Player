@@ -461,8 +461,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.metrics_action.toggled.connect(self._on_metrics_toggled)
         self.popout_video_btn.clicked.connect(self._toggle_video_window)
 
-        self.library_widget.modelLayoutChanged.connect(self._on_library_layout_changed)
-
         self.engine.trackChanged.connect(self._on_track_changed)
         self.engine.stateChanged.connect(self._on_state_changed)
         self.engine.errorOccurred.connect(self._on_error)
@@ -839,11 +837,6 @@ class MainWindow(QtWidgets.QMainWindow):
     def _on_effect_auto_enabled(self, effect_name: str) -> None:
         self._set_effect_toggle(effect_name, True, update_checkbox=True)
 
-    def _on_library_layout_changed(self):
-        """Called when library sort order or content changes."""
-        if self.engine.track:
-            self._sync_current_index_from_path(self.engine.track.path)
-
     def _on_library_track_activated(self, track: LibraryTrack):
         # Update current index based on table selection
         indexes = self.library_widget.table.selectionModel().selectedRows()
@@ -986,28 +979,6 @@ class MainWindow(QtWidgets.QMainWindow):
         if next_path:
             self.engine.queue_next_track(next_path)
 
-    def _validate_current_index(self, model: QtCore.QAbstractItemModel) -> None:
-        """
-        Verify that self._current_index actually points to the currently playing track.
-        If not, attempt to find the track and update self._current_index.
-        """
-        if self.engine.track is None:
-            return
-
-        # Check if current index is valid and matches current track path
-        if 0 <= self._current_index < model.rowCount():
-            idx = model.index(self._current_index, 0)
-            track = model.data(idx, QtCore.Qt.ItemDataRole.UserRole)
-            if track:
-                # robust comparison
-                p1 = os.path.normpath(track.path).lower()
-                p2 = os.path.normpath(self.engine.track.path).lower()
-                if p1 == p2:
-                    return # All good
-
-        # If we got here, the index is stale or wrong. Re-sync.
-        self._sync_current_index_from_path(self.engine.track.path)
-
     def _get_next_track_path(self) -> Optional[str]:
         """Determine the next track path based on current settings."""
         model = self.library_widget.table.model()
@@ -1016,9 +987,6 @@ class MainWindow(QtWidgets.QMainWindow):
         count = model.rowCount()
         if count == 0:
             return None
-        
-        # Ensure we are starting from the correct index
-        self._validate_current_index(model)
         
         current = self._current_index
 
@@ -1095,33 +1063,21 @@ class MainWindow(QtWidgets.QMainWindow):
         model = self.library_widget.table.model()
         if not model:
             return
-            
-        # Normalize target path for robust comparison
-        norm_target = os.path.normpath(track_path).lower()
-        
         count = model.rowCount()
         for row in range(count):
             idx = model.index(row, 0)
             track = model.data(idx, QtCore.Qt.ItemDataRole.UserRole)
-            
-            if track:
-                # Normalize candidate path
-                norm_candidate = os.path.normpath(track.path).lower()
-                
-                if norm_candidate == norm_target:
-                    if self._current_index != row:
-                        # Update shuffle state when transitioning
-                        if self._shuffle and self._current_index >= 0:
-                            self._shuffle_history.append(self._current_index)
-                            # Remove the new track from shuffle bag if present
-                            if row in self._shuffle_bag:
-                                try:
-                                    self._shuffle_bag.remove(row)
-                                except ValueError:
-                                    pass
-                        self._current_index = row
-                        self.library_widget.table.selectRow(row)
-                    return
+            if track and track.path == track_path:
+                if self._current_index != row:
+                    # Update shuffle state when transitioning
+                    if self._shuffle and self._current_index >= 0:
+                        self._shuffle_history.append(self._current_index)
+                        # Remove the new track from shuffle bag if present
+                        if row in self._shuffle_bag:
+                            self._shuffle_bag.remove(row)
+                    self._current_index = row
+                    self.library_widget.table.selectRow(row)
+                return
 
     def _on_seek_fraction(self, frac: float):
         if self.engine.track is None:
