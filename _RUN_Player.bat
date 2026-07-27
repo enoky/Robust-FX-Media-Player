@@ -1,3 +1,3 @@
 @echo off
-call venv\scripts\activate.bat
-call python app.py
+cd /d "%~dp0"
+start "" "venv\scripts\pythonw.exe" app.py

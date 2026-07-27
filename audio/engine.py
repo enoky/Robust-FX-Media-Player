@@ -13,6 +13,9 @@ from collections import deque
 import numpy as np
 import subprocess
 
+# Keep ffmpeg from opening a console window when the app runs under pythonw.exe.
+_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
 from PySide6 import QtCore, QtGui
 
 try:
@@ -284,7 +287,9 @@ class DecoderThread(threading.Thread):
     def run(self):
         cmd = make_ffmpeg_cmd(self.track_path, self.start_sec, self.sample_rate, self.channels)
         try:
-            self._proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            self._proc = subprocess.Popen(
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, creationflags=_NO_WINDOW
+            )
         except Exception as e:
             self._state_cb("error", f"Failed to start ffmpeg: {e}")
             return
@@ -489,7 +494,9 @@ class VideoDecoderThread(threading.Thread):
             return
         cmd = make_ffmpeg_video_cmd(self.track_path, self.start_sec, self.fps)
         try:
-            self._proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            self._proc = subprocess.Popen(
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, creationflags=_NO_WINDOW
+            )
         except Exception as e:
             self._state_cb("error", f"Failed to start video ffmpeg: {e}")
             return
